@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en" style="background: #0f1509;">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={Plug.CSRFProtection.get_csrf_token()} />
+    <meta name="squatch-mail-csrf-token" content={Plug.CSRFProtection.get_csrf_token()} />
+    <meta name="squatch-mail-socket-path" content="/live" />
+    <title>SquatchMail</title>
+    <link rel="stylesheet" href={@dashboard_path <> "/assets/" <> SquatchMail.Web.AssetController.asset_path(:css)} />
+    <script defer src={@dashboard_path <> "/assets/" <> SquatchMail.Web.AssetController.asset_path(:js)}>
+    </script>
+  </head>
+  <body>
+    <%= @inner_content %>
+  </body>
+</html>

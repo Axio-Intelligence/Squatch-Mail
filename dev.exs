@@ -1,18 +1,11 @@
 # Development preview server for SquatchMail.
 #
-# Boots a minimal Phoenix endpoint with the (future) SquatchMail dashboard
-# mounted, backed by a dev Postgres database and Swoosh's local adapter.
+# Boots a minimal Phoenix endpoint with the SquatchMail dashboard mounted at
+# /squatch, backed by a dev Postgres database and Swoosh's local adapter.
 #
 # Usage:
 #
 #     mix dev
-#
-# TODO: once the dashboard router macro exists, mount it here, e.g.:
-#
-#     scope "/" do
-#       pipe_through :browser
-#       squatch_mail_dashboard "/squatch"
-#     end
 
 Application.put_env(:squatch_mail_dev, SquatchMailDev.Endpoint,
   adapter: Bandit.PhoenixAdapter,
@@ -49,8 +42,7 @@ defmodule SquatchMailDev.PageController do
       <head><title>SquatchMail dev</title></head>
       <body>
         <h1>SquatchMail dev preview</h1>
-        <p>The dashboard isn't mounted yet — this is a placeholder page.</p>
-        <p>See the TODO at the top of <code>dev.exs</code>.</p>
+        <p>The dashboard is mounted at <a href="/squatch">/squatch</a>.</p>
       </body>
     </html>
     """)
@@ -59,10 +51,15 @@ end
 
 defmodule SquatchMailDev.Router do
   use Phoenix.Router
+  import Phoenix.Controller
+  import SquatchMail.Web.Router
 
   pipeline :browser do
     plug :accepts, ["html"]
+    plug :fetch_session
+    plug :fetch_flash
     plug :put_secure_browser_headers
+    plug :protect_from_forgery
   end
 
   scope "/" do
@@ -70,7 +67,10 @@ defmodule SquatchMailDev.Router do
 
     get "/", SquatchMailDev.PageController, :index
 
-    # TODO: mount `squatch_mail_dashboard "/squatch"` here once it exists.
+    # Open access in dev: no `:on_mount` given and no `:basic_auth`
+    # configured, so `SquatchMail.Web.Plugs.Auth` falls through to layer (c)
+    # — allowed here because config/dev.exs sets `allow_unauthenticated: true`.
+    squatch_mail_dashboard("/squatch")
   end
 end
 

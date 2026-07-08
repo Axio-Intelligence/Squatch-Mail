@@ -56,15 +56,19 @@ defmodule SquatchMail.MixProject do
       {:esbuild, "~> 0.8", runtime: false, only: :dev},
       {:tailwind, "~> 0.2", runtime: false, only: :dev},
       {:phoenix_live_reload, "~> 1.5", only: :dev},
-      {:bandit, "~> 1.12", only: :dev},
+      {:bandit, "~> 1.12", only: [:dev, :test]},
       {:floki, "~> 0.36", only: :test},
+      # phoenix_live_view's `live/2` test helper requires this (superseding
+      # floki for that helper as of phoenix_live_view 1.1+).
+      {:lazy_html, "~> 0.1.0", only: :test},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
   end
 
   defp aliases do
     [
-      dev: "run --no-halt dev.exs"
+      dev: "run --no-halt dev.exs",
+      "assets.build": ["esbuild squatch_mail", "squatch_mail.copy_css"]
     ]
   end
 
@@ -76,7 +80,8 @@ defmodule SquatchMail.MixProject do
     [
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib priv/repo/migrations .formatter.exs mix.exs README.md CLAUDE.md)
+      files:
+        ~w(lib priv/repo/migrations priv/static .formatter.exs mix.exs README.md CHANGELOG.md SECURITY.md CLAUDE.md)
     ]
   end
 
@@ -84,7 +89,15 @@ defmodule SquatchMail.MixProject do
     [
       main: "SquatchMail",
       source_ref: "v#{@version}",
-      source_url: @source_url
+      source_url: @source_url,
+      extras: [
+        "README.md",
+        "CHANGELOG.md",
+        "SECURITY.md",
+        "RESEARCH.md",
+        "FEATURES.md",
+        "DESIGN.md"
+      ]
     ]
   end
 end

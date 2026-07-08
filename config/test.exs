@@ -17,6 +17,18 @@ config :squatch_mail, SquatchMail.Test.Repo,
 
 config :logger, level: :warning
 
+# Endpoint for the web-layer's own test support (test/support/web_endpoint.ex),
+# used by test/squatch_mail/web/*_test.exs. Separate from the data layer's
+# `SquatchMail.Test.Repo` config above — these tests need a router, not a
+# database.
+config :squatch_mail, SquatchMail.Test.WebEndpoint,
+  live_view: [signing_salt: "squatch_mail_test_salt"],
+  secret_key_base: String.duplicate("a", 64),
+  pubsub_server: SquatchMail.Test.PubSub,
+  server: false,
+  check_origin: false,
+  render_errors: [formats: [html: SquatchMail.Test.ErrorHTML], layout: false]
+
 # Swoosh is only present here as an optional/observed dependency (see
 # CLAUDE.md); avoid pulling in hackney just to satisfy its Application start.
 config :swoosh, :api_client, Swoosh.ApiClient.Finch
