@@ -1,0 +1,12 @@
+{
+  "Type": "UnsubscribeConfirmation",
+  "MessageId": "47138184-6831-46b8-8f7c-afc488602d7d",
+  "Token": "2336412f37fb687f5d51e6e241d09c805a5a57b30d712f794cc5f6a988666d92483754e105bf7a495e19d1a2764f3d8686bfb7f11..",
+  "TopicArn": "arn:aws:sns:us-east-1:123456789012:squatch-mail-ses-events",
+  "Message": "You have chosen to deactivate subscription arn:aws:sns:us-east-1:123456789012:squatch-mail-ses-events:abcd. To cancel this operation and restore the subscription, visit the SubscribeURL included in this message.",
+  "SubscribeURL": "https://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription&TopicArn=arn:aws:sns:us-east-1:123456789012:squatch-mail-ses-events&Token=2336412f37fb687f5d51e6e241d09c805a5a57b30d712f794cc5f6a988666d92483754e105bf7a495e19d1a2764f3d8686bfb7f11..",
+  "Timestamp": "2026-07-08T00:00:00.000Z",
+  "SignatureVersion": "1",
+  "Signature": "REPLACED_IN_TEST",
+  "SigningCertURL": "https://sns.us-east-1.amazonaws.com/SimpleNotificationService-REPLACED.pem"
+}

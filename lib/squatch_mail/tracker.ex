@@ -27,7 +27,8 @@ defmodule SquatchMail.Tracker do
     Email,
     EmailEvent,
     Source,
-    Suppression
+    Suppression,
+    WebhookLog
   }
 
   @typep changeset :: Ecto.Changeset.t()
@@ -604,6 +605,27 @@ defmodule SquatchMail.Tracker do
     get_or_create_source()
     |> Source.changeset(normalize_keys(attrs))
     |> repo().update()
+  end
+
+  ## ---------------------------------------------------------------------------
+  ## Webhook audit log
+  ## ---------------------------------------------------------------------------
+
+  @doc """
+  Records an inbound webhook audit entry.
+
+  `attrs` follows `SquatchMail.WebhookLog`'s castable fields (`:provider`,
+  `:message_type`, `:status`, `:payload`, `:error`). Callers are expected to
+  log every inbound webhook payload regardless of outcome, so this always
+  inserts rather than upserting.
+  """
+  @spec log_webhook(map()) :: {:ok, WebhookLog.t()} | {:error, changeset()}
+  def log_webhook(attrs) do
+    attrs = normalize_keys(attrs)
+
+    %WebhookLog{}
+    |> WebhookLog.changeset(attrs)
+    |> repo().insert()
   end
 
   ## ---------------------------------------------------------------------------

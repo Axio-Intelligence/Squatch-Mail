@@ -1,0 +1,29 @@
+{
+  "eventType": "Bounce",
+  "bounce": {
+    "bounceType": "Transient",
+    "bounceSubType": "General",
+    "bouncedRecipients": [
+      {
+        "emailAddress": "recipient2@example.com",
+        "action": "delayed",
+        "status": "4.0.0"
+      }
+    ],
+    "timestamp": "2012-05-25T14:59:38.605Z",
+    "feedbackId": "000001378603176d-5a4b5ad9-6f30-4198-a8c3-b1eb0c270a1d-000000",
+    "remoteMtaIp": "127.0.2.0"
+  },
+  "mail": {
+    "timestamp": "2012-05-25T14:58:38.605Z",
+    "source": "sender@example.com",
+    "sourceArn": "arn:aws:ses:us-east-1:123456789012:identity/sender@example.com",
+    "sendingAccountId": "123456789012",
+    "messageId": "EXAMPLE7c191be45-e9aedb9a-02f9-4d12-a87d-dd0099a07f8b-000000",
+    "destination": ["recipient2@example.com"],
+    "headersTruncated": false,
+    "tags": {
+      "ses:configuration-set": ["ConfigSet"]
+    }
+  }
+}
