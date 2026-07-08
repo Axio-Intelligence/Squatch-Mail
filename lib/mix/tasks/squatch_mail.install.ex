@@ -93,12 +93,25 @@ if Code.ensure_loaded?(Igniter) do
       dashboard_path = igniter.args.options[:dashboard_path] || @default_dashboard_path
       mount_dashboard? = Keyword.get(igniter.args.options, :dashboard, true)
 
-      igniter
-      |> set_up_configuration(app_name, repo)
-      |> set_up_formatter()
-      |> set_up_database(repo)
-      |> maybe_set_up_web_ui(mount_dashboard?, router, dashboard_path)
-      |> Igniter.add_notice(next_steps_notice(mount_dashboard?, dashboard_path))
+      igniter =
+        igniter
+        |> set_up_configuration(app_name, repo)
+        |> set_up_formatter()
+        |> set_up_database(repo)
+        |> maybe_set_up_web_ui(mount_dashboard?, router, dashboard_path)
+
+      # The endpoint's raw-body wiring is independent of whether the
+      # dashboard itself gets mounted (`--no-dashboard`): the SNS webhook
+      # route is part of `squatch_mail_dashboard`'s own macro expansion, and
+      # signature verification needs it regardless of which pages are
+      # rendered. It's also independent of the router entirely — the fix
+      # belongs on the *endpoint*, so it runs even when no router was found.
+      {igniter, body_reader_status} = set_up_webhook_body_reader(igniter, router, dashboard_path)
+
+      Igniter.add_notice(
+        igniter,
+        next_steps_notice(mount_dashboard?, dashboard_path, body_reader_status)
+      )
     end
 
     defp set_up_configuration(igniter, app_name, repo) do
@@ -127,6 +140,243 @@ if Code.ensure_loaded?(Igniter) do
         body: migration_body,
         on_exists: :skip
       )
+    end
+
+    # `Plug.Parsers`'s `:body_reader` option is endpoint-wide (see
+    # `SquatchMail.Web.Router`'s "Webhook raw body" moduledoc section) —
+    # there is no way for the dashboard's router macro to arrange for SNS's
+    # raw bytes to survive to `SquatchMail.SNS.RawBodyReader`. The installer
+    # is the only place that can reach into the host's *endpoint*, so it
+    # does the AST surgery here: generate a path-conditional body-reader
+    # module and wire it into the endpoint's existing `Plug.Parsers` call.
+    #
+    # This is fragile territory on purpose: if the endpoint doesn't look
+    # like a standard `mix phx.new` endpoint (no `Plug.Parsers` call, or one
+    # we can't safely recognize as a plain keyword list, or one that already
+    # has a *different* `:body_reader` wired up), we do not guess or
+    # overwrite — we fall back to a loud notice with the exact copy-paste
+    # snippet, the same way `set_up_web_ui/3` falls back to manual
+    # instructions when no router is found.
+    # Returns `{igniter, status}` where `status` is one of:
+    #
+    #   * `:wired` - the endpoint was patched (or created the reader module)
+    #     just now.
+    #   * `:already_wired` - a previous run already did this; true no-op.
+    #   * `:needs_manual_action` - no endpoint was found, or the endpoint's
+    #     `Plug.Parsers` shape was too fragile to patch safely; a loud notice
+    #     with the copy-paste snippet was already added.
+    #
+    # `next_steps_notice/3` uses this to decide what to tell the user, since
+    # a silent successful patch and a "go do this by hand" fallback need very
+    # different closing instructions.
+    defp set_up_webhook_body_reader(igniter, router, dashboard_path) do
+      {igniter, endpoint} = Igniter.Libs.Phoenix.select_endpoint(igniter, router)
+
+      case endpoint do
+        nil ->
+          {Igniter.add_notice(igniter, no_endpoint_found_notice(dashboard_path)),
+           :needs_manual_action}
+
+        endpoint ->
+          patch_endpoint_body_reader(igniter, endpoint, dashboard_path)
+      end
+    end
+
+    defp patch_endpoint_body_reader(igniter, endpoint, dashboard_path) do
+      reader_module = Igniter.Libs.Phoenix.web_module_name(igniter, "SquatchMailBodyReader")
+      path_segments = dashboard_path |> String.trim("/") |> String.split("/")
+
+      case body_reader_status(igniter, endpoint, reader_module) do
+        {:already_wired, igniter} ->
+          {igniter, :already_wired}
+
+        {:needs_wiring, igniter} ->
+          igniter =
+            igniter
+            |> ensure_body_reader_module(reader_module, path_segments)
+            |> wire_body_reader_into_parsers(endpoint, reader_module)
+
+          {igniter, :wired}
+
+        {:fragile, igniter} ->
+          igniter =
+            Igniter.add_notice(
+              igniter,
+              fragile_endpoint_notice(endpoint, reader_module, path_segments, dashboard_path)
+            )
+
+          {igniter, :needs_manual_action}
+      end
+    end
+
+    # Inspects the endpoint's `plug(Plug.Parsers, opts)` call (if any) to
+    # decide which of three states we're in:
+    #
+    #   * `:already_wired` - `body_reader:` is already set to *our* module.
+    #     Re-running the installer must be a true no-op here.
+    #   * `:needs_wiring` - a `Plug.Parsers` call exists, as a literal
+    #     keyword list, with no `body_reader:` key (or an unset/nil one) —
+    #     safe to patch.
+    #   * `:fragile` - no `Plug.Parsers` call was found, its options aren't a
+    #     plain literal keyword list we can safely inspect/modify, or
+    #     `body_reader:` is already set to something that isn't ours (a host
+    #     that has its own custom reader we must not clobber).
+    defp body_reader_status(igniter, endpoint, reader_module) do
+      {igniter, source, zipper} = Igniter.Project.Module.find_module!(igniter, endpoint)
+
+      result =
+        with {:ok, call_zipper} <- find_parsers_call(zipper),
+             {:ok, opts_zipper} <- Igniter.Code.Function.move_to_nth_argument(call_zipper, 1),
+             true <- Igniter.Code.List.list?(opts_zipper) do
+          case Igniter.Code.Keyword.get_key(opts_zipper, :body_reader) do
+            {:ok, value_zipper} ->
+              if nodes_equal_to_reader?(value_zipper, reader_module) do
+                :already_wired
+              else
+                :fragile
+              end
+
+            :error ->
+              :needs_wiring
+          end
+        else
+          _ -> :fragile
+        end
+
+      # find_module!/2 returns an igniter that must not be discarded even
+      # when we only read from `source`/`zipper` here.
+      _ = source
+      {result, igniter}
+    end
+
+    defp find_parsers_call(zipper) do
+      Igniter.Code.Function.move_to_function_call(
+        zipper,
+        :plug,
+        [1, 2],
+        &Igniter.Code.Function.argument_equals?(&1, 0, Plug.Parsers)
+      )
+    end
+
+    defp nodes_equal_to_reader?(value_zipper, reader_module) do
+      Igniter.Code.Common.nodes_equal?(value_zipper, reader_value_ast(reader_module))
+    end
+
+    defp ensure_body_reader_module(igniter, reader_module, path_segments) do
+      {exists?, igniter} = Igniter.Project.Module.module_exists(igniter, reader_module)
+
+      if exists? do
+        igniter
+      else
+        Igniter.Project.Module.create_module(igniter, reader_module, """
+        @moduledoc \"\"\"
+        Preserves the raw bytes of SquatchMail's inbound SNS webhook request so
+        `SquatchMail.SNS.MessageVerifier` can check its signature against exactly
+        what SNS sent — see `SquatchMail.Web.Router`'s moduledoc ("Webhook raw
+        body") for why this can't be wired up anywhere but here, on the endpoint
+        itself. Every other request (including the rest of the SquatchMail
+        dashboard) falls through to the plain, uncached body reader.
+
+        Generated by `mix squatch_mail.install`. Safe to edit if you move the
+        dashboard to a different path later — update `path_segments/0` to match.
+        \"\"\"
+
+        @path_segments #{inspect(path_segments)}
+
+        def read_body(conn, opts) do
+          if match?(^@path_segments ++ ["webhooks", "sns", _token], conn.path_info) do
+            SquatchMail.SNS.RawBodyReader.read_body(conn, opts)
+          else
+            Plug.Conn.read_body(conn, opts)
+          end
+        end
+        """)
+      end
+    end
+
+    defp wire_body_reader_into_parsers(igniter, endpoint, reader_module) do
+      # `set_keyword_key/4`'s value argument is spliced into the source as
+      # quoted code, not a runtime term — a bare `{reader_module, :read_body,
+      # []}` tuple here is ambiguous with Elixir's 3-element-tuple AST
+      # shorthand and corrupts Sourceror's line metadata on reformat (this
+      # was caught by test/mix/tasks/squatch_mail.install_test.exs raising
+      # `Access.get/3` deep inside Sourceror.LinesCorrector). Parse the
+      # exact string we already use for equality-checking in
+      # nodes_equal_to_reader?/2 instead, so both places construct the
+      # identical AST shape.
+      reader_ast = reader_value_ast(reader_module)
+
+      Igniter.Project.Module.find_and_update_module!(igniter, endpoint, fn zipper ->
+        with {:ok, call_zipper} <- find_parsers_call(zipper),
+             {:ok, opts_zipper} <- Igniter.Code.Function.move_to_nth_argument(call_zipper, 1),
+             {:ok, opts_zipper} <-
+               Igniter.Code.Keyword.set_keyword_key(
+                 opts_zipper,
+                 :body_reader,
+                 reader_ast
+               ) do
+          {:ok, opts_zipper}
+        else
+          _ -> {:ok, zipper}
+        end
+      end)
+    end
+
+    defp reader_value_ast(reader_module) do
+      "{#{inspect(reader_module)}, :read_body, []}"
+      |> Sourceror.parse_string!()
+    end
+
+    defp no_endpoint_found_notice(dashboard_path) do
+      path_segments = dashboard_path |> String.trim("/") |> String.split("/")
+
+      """
+      No Phoenix endpoint was found, so SquatchMail could not wire up the raw \
+      body reader the SNS webhook needs. Every real SNS notification will fail \
+      signature verification until this is done by hand.
+
+      #{manual_body_reader_snippet("MyAppWeb.SquatchMailBodyReader", path_segments)}
+      """
+    end
+
+    defp fragile_endpoint_notice(endpoint, reader_module, path_segments, _dashboard_path) do
+      """
+      SquatchMail could not automatically wire up the raw body reader \
+      #{inspect(endpoint)} needs for SNS webhook signature verification — its \
+      `Plug.Parsers` options weren't in a shape the installer could safely \
+      recognize (or a different `:body_reader` is already configured there). \
+      Rather than guess and risk breaking your existing body parsing, teach \
+      your endpoint to preserve the evidence yourself:
+
+      #{manual_body_reader_snippet(inspect(reader_module), path_segments)}
+
+      Every real SNS notification will fail signature verification until this \
+      is wired up — see `SquatchMail.Web.Router`'s moduledoc ("Webhook raw \
+      body") for why it can't be done automatically here.
+      """
+    end
+
+    defp manual_body_reader_snippet(reader_module, path_segments) do
+      """
+          # in your endpoint.ex
+          defmodule #{reader_module} do
+            @path_segments #{inspect(path_segments)}
+
+            def read_body(conn, opts) do
+              if match?(^@path_segments ++ ["webhooks", "sns", _token], conn.path_info) do
+                SquatchMail.SNS.RawBodyReader.read_body(conn, opts)
+              else
+                Plug.Conn.read_body(conn, opts)
+              end
+            end
+          end
+
+          plug Plug.Parsers,
+            parsers: [:urlencoded, :multipart, :json],
+            pass: ["*/*"],
+            json_decoder: Phoenix.json_library(),
+            body_reader: {#{reader_module}, :read_body, []}
+      """
     end
 
     defp maybe_set_up_web_ui(igniter, false, _router, _dashboard_path), do: igniter
@@ -248,7 +498,7 @@ if Code.ensure_loaded?(Igniter) do
       end)
     end
 
-    defp next_steps_notice(mount_dashboard?, dashboard_path) do
+    defp next_steps_notice(mount_dashboard?, dashboard_path, body_reader_status) do
       dashboard_line =
         if mount_dashboard? do
           "  * Visit #{dashboard_path} after running migrations — the Squatch is watching your outbox now.\n"
@@ -266,7 +516,25 @@ if Code.ensure_loaded?(Igniter) do
       #{dashboard_line}
         * SquatchMail observes mail sent through Swoosh automatically via \
       telemetry — no mailer changes required.
+      #{webhook_body_reader_line(body_reader_status)}\
       """
+    end
+
+    defp webhook_body_reader_line(:wired) do
+      "  * Your endpoint now preserves the raw bytes SNS signatures need — the " <>
+        "trail evidence is intact. Nothing further to do for webhook setup.\n"
+    end
+
+    defp webhook_body_reader_line(:already_wired) do
+      "  * Your endpoint was already preserving raw SNS bytes from a previous " <>
+        "run — still intact, nothing further to do.\n"
+    end
+
+    defp webhook_body_reader_line(:needs_manual_action) do
+      "  * SquatchMail could NOT wire up your endpoint's webhook raw-body " <>
+        "reader automatically — see the notice above for the exact snippet. " <>
+        "Every real SNS notification will fail signature verification until " <>
+        "this is done.\n"
     end
   end
 else

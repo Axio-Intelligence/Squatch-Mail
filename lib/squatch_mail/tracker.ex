@@ -494,6 +494,39 @@ defmodule SquatchMail.Tracker do
     |> repo().preload([:recipients, :attachments, events: events_query])
   end
 
+  @doc """
+  Returns open/click counts per email, for a list of email ids, in a single
+  aggregate query.
+
+  Used by list views (e.g. the Trail Log's engagement column) that need
+  per-row engagement counts without an N+1 query per row. Ids with no
+  `email_events` of type `"open"` or `"click"` are simply absent from the
+  result map — callers should default to `0` on lookup miss, e.g.
+  `Map.get(counts, id, %{opens: 0, clicks: 0})`.
+  """
+  @spec engagement_counts([integer()]) :: %{
+          integer() => %{opens: non_neg_integer(), clicks: non_neg_integer()}
+        }
+  def engagement_counts([]), do: %{}
+
+  def engagement_counts(email_ids) when is_list(email_ids) do
+    query =
+      from ev in EmailEvent,
+        where: ev.email_id in ^email_ids,
+        group_by: ev.email_id,
+        select: %{
+          email_id: ev.email_id,
+          opens: filter(count(ev.id), ev.event_type == "open"),
+          clicks: filter(count(ev.id), ev.event_type == "click")
+        }
+
+    query
+    |> repo().all()
+    |> Map.new(fn %{email_id: id, opens: opens, clicks: clicks} ->
+      {id, %{opens: opens, clicks: clicks}}
+    end)
+  end
+
   ## ---------------------------------------------------------------------------
   ## Stats
   ## ---------------------------------------------------------------------------

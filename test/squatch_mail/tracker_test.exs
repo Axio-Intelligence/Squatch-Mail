@@ -404,6 +404,56 @@ defmodule SquatchMail.TrackerTest do
     end
   end
 
+  describe "engagement_counts/1" do
+    test "returns opens/clicks per email id from a single aggregate query, mixed events" do
+      {:ok, e1} =
+        Tracker.record_email(%{from_email: "a@example.com", message_id: "msg-engage-1"})
+
+      {:ok, e2} =
+        Tracker.record_email(%{from_email: "a@example.com", message_id: "msg-engage-2"})
+
+      {:ok, e3} =
+        Tracker.record_email(%{from_email: "a@example.com", message_id: "msg-engage-3"})
+
+      # e1: 2 opens, 1 click.
+      {:ok, _} = Tracker.record_event(%{event_type: "open", message_id: "msg-engage-1"})
+      {:ok, _} = Tracker.record_event(%{event_type: "open", message_id: "msg-engage-1"})
+      {:ok, _} = Tracker.record_event(%{event_type: "click", message_id: "msg-engage-1"})
+
+      # e2: 1 open, 0 clicks, plus a non-engagement event that must not count.
+      {:ok, _} = Tracker.record_event(%{event_type: "open", message_id: "msg-engage-2"})
+      {:ok, _} = Tracker.record_event(%{event_type: "delivery", message_id: "msg-engage-2"})
+
+      # e3: no events at all.
+
+      counts = Tracker.engagement_counts([e1.id, e2.id, e3.id])
+
+      assert counts[e1.id] == %{opens: 2, clicks: 1}
+      assert counts[e2.id] == %{opens: 1, clicks: 0}
+      refute Map.has_key?(counts, e3.id)
+    end
+
+    test "returns %{} for an empty list without querying" do
+      assert Tracker.engagement_counts([]) == %{}
+    end
+
+    test "only counts events for the requested ids" do
+      {:ok, in_scope} =
+        Tracker.record_email(%{from_email: "a@example.com", message_id: "msg-engage-scope-1"})
+
+      {:ok, out_of_scope} =
+        Tracker.record_email(%{from_email: "a@example.com", message_id: "msg-engage-scope-2"})
+
+      {:ok, _} = Tracker.record_event(%{event_type: "click", message_id: "msg-engage-scope-1"})
+      {:ok, _} = Tracker.record_event(%{event_type: "click", message_id: "msg-engage-scope-2"})
+
+      counts = Tracker.engagement_counts([in_scope.id])
+
+      assert counts == %{in_scope.id => %{opens: 0, clicks: 1}}
+      refute Map.has_key?(counts, out_of_scope.id)
+    end
+  end
+
   describe "stats/1" do
     setup do
       # Current window: [base, base + 1h). Prior window: [base - 1h, base).
