@@ -13,11 +13,14 @@ defmodule SquatchMail.Web.Router do
       end
 
   This expands to a `Phoenix.LiveView.Router.live_session/3` wrapping four
-  placeholder routes — Trail Log (`/`), a Sighting inspector stub
+  routes — Trail Log (`/`, the live activity feed), the Sighting inspector
   (`/sightings/:public_id`), the Do-Not-Disturb registry (`/suppressions`),
-  and Base Camp (`/base-camp`) — plus a `GET .../assets/*` route pair for the
-  dashboard's self-contained CSS/JS and a `POST .../webhooks/sns/:token`
-  route that forwards to `SquatchMail.Web.WebhookController`.
+  and Base Camp (`/base-camp`) — plus a `GET .../activity/export.csv` CSV
+  download (same auth as the dashboard), a `GET .../assets/*` route pair for
+  the dashboard's self-contained CSS/JS (never auth-gated), and a
+  `POST .../webhooks/sns/:token` route that forwards to
+  `SquatchMail.Web.WebhookController` (authenticated by its token, not the
+  dashboard's auth layers).
 
   ## Security
 
@@ -196,6 +199,13 @@ defmodule SquatchMail.Web.Router do
           private: %{plug_skip_csrf_protection: true}
 
         pipe_through pipeline_name
+
+        # CSV export is a plain controller download (not a LiveView), but it
+        # carries the same data as the Trail Log table, so it's gated by the
+        # same auth pipeline as the rest of the dashboard, unlike the asset
+        # and webhook routes above.
+        get "/activity/export.csv", SquatchMail.Web.ActivityExportController, :export,
+          as: :squatch_mail_export
 
         live_session session_name, session_opts do
           live "/", SquatchMail.Web.Live.TrailLog, :index, as: session_name

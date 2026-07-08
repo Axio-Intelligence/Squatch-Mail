@@ -1,8 +1,10 @@
 defmodule SquatchMail.Web.DashboardLiveTest do
   @moduledoc """
-  Mounts each placeholder dashboard LiveView end-to-end (dev-mode / open
-  access) to confirm the router macro, layout, and chrome all render
-  together without error.
+  Chrome-level smoke test shared across every dashboard LiveView: the
+  sidebar, its six nav sections, and the active-item state. Page-specific
+  behavior lives in each page's own test file (`trail_log_live_test.exs`,
+  `sighting_live_test.exs`, `suppressions_live_test.exs`,
+  `base_camp_live_test.exs`).
   """
 
   use SquatchMail.Web.WebCase, async: false
@@ -13,43 +15,10 @@ defmodule SquatchMail.Web.DashboardLiveTest do
     :ok
   end
 
-  test "Trail Log mounts with full chrome and dummy stats", %{conn: conn} do
-    {:ok, view, html} = live(conn, "/squatch")
-
-    for markup <- [html, render(view)] do
-      assert markup =~ "SQUATCHMAIL"
-      assert markup =~ "Trail Log"
-      assert markup =~ "Tracking live"
-      assert markup =~ "Sightings"
-      assert markup =~ "Delivery rate"
-      assert markup =~ "The forest is quiet"
-    end
-  end
-
-  test "Sighting inspector stub mounts with the given public_id", %{conn: conn} do
-    {:ok, _view, html} = live(conn, "/squatch/sightings/em_abc123")
-
-    assert html =~ "em_abc123"
-    assert html =~ "unconfirmed"
-  end
-
-  test "Suppressions (Do-Not-Disturb) stub mounts", %{conn: conn} do
-    {:ok, _view, html} = live(conn, "/squatch/suppressions")
-
-    assert html =~ "Do-Not-Disturb"
-    assert html =~ "respects boundaries"
-  end
-
-  test "Base Camp stub mounts", %{conn: conn} do
-    {:ok, _view, html} = live(conn, "/squatch/base-camp")
-
-    assert html =~ "Base Camp"
-    assert html =~ "Connect your SES credentials"
-  end
-
   test "sidebar nav renders all six sections with the current page marked active", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/squatch")
 
+    assert html =~ "SQUATCHMAIL"
     assert html =~ "Trail Log"
     assert html =~ "Sightings"
     assert html =~ "Bounces"

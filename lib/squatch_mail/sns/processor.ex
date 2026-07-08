@@ -270,7 +270,14 @@ defmodule SquatchMail.SNS.Processor do
     if duplicate_event?(attrs) do
       {:ok, :duplicate}
     else
-      Tracker.record_event(attrs)
+      case Tracker.record_event(attrs) do
+        {:ok, event} = ok ->
+          :telemetry.execute([:squatch_mail, :email, :recorded], %{count: 1}, %{event: event})
+          ok
+
+        error ->
+          error
+      end
     end
   end
 

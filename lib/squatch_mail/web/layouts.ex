@@ -98,7 +98,12 @@ defmodule SquatchMail.Web.Layouts do
       %{id: :sightings, label: "Sightings", path: "/sightings", icon: :sightings},
       %{id: :bounces, label: "Bounces", path: "/bounces", icon: :bounces},
       %{id: :complaints, label: "Complaints", path: "/complaints", icon: :complaints},
-      %{id: :do_not_disturb, label: "Do-Not-Disturb", path: "/suppressions", icon: :do_not_disturb},
+      %{
+        id: :do_not_disturb,
+        label: "Do-Not-Disturb",
+        path: "/suppressions",
+        icon: :do_not_disturb
+      },
       %{id: :base_camp, label: "Base Camp", path: "/base-camp", icon: :base_camp}
     ]
   end

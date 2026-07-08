@@ -130,7 +130,8 @@ defmodule SquatchMail.Capture.Recorder do
 
   defp persist(attrs) do
     case Tracker.record_email(attrs) do
-      {:ok, _email} ->
+      {:ok, email} ->
+        :telemetry.execute([:squatch_mail, :email, :recorded], %{count: 1}, %{email: email})
         :ok
 
       {:error, changeset} ->
