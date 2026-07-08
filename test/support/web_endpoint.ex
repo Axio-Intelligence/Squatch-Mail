@@ -61,14 +61,38 @@ defmodule SquatchMail.Test.WebEndpoint do
 
   plug Plug.Session, @session_options
 
+  # body_reader wired the same way hosts are documented to wire it in their
+  # own endpoint (see SquatchMail.Web.Router's "Webhook raw body" section):
+  # path-conditional, so only the SNS webhook route pays for raw-body
+  # caching. This lets webhook_route_test.exs prove the reference wiring
+  # actually preserves bytes end-to-end, not just that the route dispatches.
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
-    json_decoder: Phoenix.json_library()
+    json_decoder: Phoenix.json_library(),
+    body_reader: {SquatchMail.Test.CacheBodyReader, :read_body, []}
 
   plug Plug.MethodOverride
   plug Plug.Head
   plug Router
+end
+
+defmodule SquatchMail.Test.CacheBodyReader do
+  @moduledoc """
+  Test-support copy of the path-conditional `body_reader` documented on
+  `SquatchMail.Web.Router` ("Webhook raw body") as required host-endpoint
+  wiring — exercised here so `webhook_route_test.exs` can assert the
+  documented pattern actually preserves raw bytes to
+  `SquatchMail.SNS.RawBodyReader`, not just that routing works.
+  """
+
+  def read_body(conn, opts) do
+    if match?(["squatch", "webhooks", "sns", _token], conn.path_info) do
+      SquatchMail.SNS.RawBodyReader.read_body(conn, opts)
+    else
+      Plug.Conn.read_body(conn, opts)
+    end
+  end
 end
 
 defmodule SquatchMail.Test.HostOnMount do

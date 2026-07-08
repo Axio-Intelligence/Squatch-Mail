@@ -97,6 +97,50 @@ defmodule SquatchMail.Web.Router do
   plug covers, in any configuration, so the refusal page itself always
   renders correctly instead of appearing broken.
 
+  ## Webhook raw body
+
+  SNS signature verification (`SquatchMail.SNS.MessageVerifier`, used by
+  `SquatchMail.Web.WebhookController`) needs the exact bytes SNS sent, not a
+  round-tripped re-encoding of the parsed params. This is the one piece of
+  wiring `squatch_mail_dashboard` genuinely **cannot** set up for you: by the
+  time a router (this macro included) sees a request, the host application's
+  own endpoint has already run `Plug.Parsers` and discarded the raw body.
+  `Plug.Parsers`'s `:body_reader` option has no per-route scoping — it's
+  endpoint-wide — so there is no router-level fix.
+
+  You must add a path-conditional `body_reader` to your own endpoint,
+  *before* the router plug, that delegates to
+  `SquatchMail.SNS.RawBodyReader` only for the webhook path and falls
+  through to the plain reader for everything else (including the rest of
+  the dashboard, which doesn't need this):
+
+      # in your endpoint.ex
+      defmodule MyAppWeb.CacheBodyReader do
+        def read_body(conn, opts) do
+          if match?(["squatch", "webhooks", "sns", _token], conn.path_info) do
+            SquatchMail.SNS.RawBodyReader.read_body(conn, opts)
+          else
+            Plug.Conn.read_body(conn, opts)
+          end
+        end
+      end
+
+      plug Plug.Parsers,
+        parsers: [:urlencoded, :multipart, :json],
+        pass: ["*/*"],
+        json_decoder: Phoenix.json_library(),
+        body_reader: {MyAppWeb.CacheBodyReader, :read_body, []}
+
+  Adjust the path prefix if you mount the dashboard somewhere other than
+  `/squatch`. `dev.exs` and `test/support/web_endpoint.ex` in this repo carry
+  this exact pattern (`SquatchMailDev.CacheBodyReader` /
+  `SquatchMail.Test.CacheBodyReader`) as reference implementations, and
+  `test/squatch_mail/web/webhook_route_test.exs` asserts the wiring
+  preserves bytes exactly. If this step is skipped, `WebhookController`
+  falls back to re-encoding `conn.params` as JSON — not byte-identical to
+  what SNS sent — so signature verification will fail on every request; see
+  `SquatchMail.SNS.RawBodyReader`'s own moduledoc for the underlying detail.
+
   ## Options
 
     * `:on_mount` - a list of `on_mount` hooks run before SquatchMail's own.
@@ -139,11 +183,9 @@ defmodule SquatchMail.Web.Router do
         # purpose: the dashboard's CSS/JS (including the refusal page's own
         # styling) must load no matter how — or whether — the routes below
         # are gated.
-        get "/assets/css-:md5", SquatchMail.Web.AssetController, :css,
-          as: :squatch_mail_asset
+        get "/assets/css-:md5", SquatchMail.Web.AssetController, :css, as: :squatch_mail_asset
 
-        get "/assets/js-:md5", SquatchMail.Web.AssetController, :js,
-          as: :squatch_mail_asset
+        get "/assets/js-:md5", SquatchMail.Web.AssetController, :js, as: :squatch_mail_asset
 
         # The SNS webhook is a machine-to-machine API route authenticated by
         # its per-source `:token` segment, not a browser session — it must

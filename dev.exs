@@ -49,6 +49,27 @@ defmodule SquatchMailDev.PageController do
   end
 end
 
+defmodule SquatchMailDev.CacheBodyReader do
+  @moduledoc """
+  Reference implementation of the host-side `body_reader` every application
+  mounting `squatch_mail_dashboard` must add to their own endpoint — see
+  `SquatchMail.Web.Router`'s moduledoc ("Webhook raw body") for why this
+  can't be done inside the dashboard's router macro. `Plug.Parsers`'
+  `:body_reader` is endpoint-wide, not per-route, so the reader itself must
+  check the path: only the SNS webhook route needs raw bytes cached via
+  `SquatchMail.SNS.RawBodyReader`; every other request (including the rest
+  of the dashboard) falls through to the plain, uncached reader.
+  """
+
+  def read_body(conn, opts) do
+    if match?(["squatch", "webhooks", "sns", _token], conn.path_info) do
+      SquatchMail.SNS.RawBodyReader.read_body(conn, opts)
+    else
+      Plug.Conn.read_body(conn, opts)
+    end
+  end
+end
+
 defmodule SquatchMailDev.Router do
   use Phoenix.Router
   import Phoenix.Controller
@@ -84,10 +105,18 @@ defmodule SquatchMailDev.Endpoint do
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
+  # `body_reader` is endpoint-wide (Plug.Parsers has no per-route scoping),
+  # so the reader itself must decide, per request, whether to cache raw
+  # bytes — SquatchMailDev.CacheBodyReader below only does so for the SNS
+  # webhook path and otherwise falls through to the plain reader. See
+  # `SquatchMail.Web.Router`'s moduledoc ("Webhook raw body") for why this
+  # can't be handled inside the dashboard's own router macro: by the time a
+  # router runs, an endpoint's Plug.Parsers has already consumed the body.
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
-    json_decoder: Phoenix.json_library()
+    json_decoder: Phoenix.json_library(),
+    body_reader: {SquatchMailDev.CacheBodyReader, :read_body, []}
 
   plug Plug.MethodOverride
   plug Plug.Head
