@@ -186,13 +186,13 @@ defmodule SquatchMail.GuardTest do
     setup do
       Application.put_env(:squatch_mail, TestMailer, adapter: Swoosh.Adapters.Test)
 
-      # resend/2 does a genuine Mailer.deliver, which SquatchMail.Capture
-      # (attached globally for the test run) would otherwise pick up and
-      # persist asynchronously via a spawned Task — racing this test's
-      # sandbox teardown for no benefit here, since these tests aren't
-      # exercising capture.
-      SquatchMail.Capture.detach()
-      on_exit(&SquatchMail.Capture.attach/0)
+      # resend/2 does a genuine Mailer.deliver, which
+      # SquatchMail.TelemetryCapture (attached globally for the test run)
+      # would otherwise pick up and persist asynchronously via a spawned
+      # Task — racing this test's sandbox teardown for no benefit here,
+      # since these tests aren't exercising capture.
+      SquatchMail.TelemetryCapture.detach()
+      on_exit(&SquatchMail.TelemetryCapture.attach/0)
       :ok
     end
 

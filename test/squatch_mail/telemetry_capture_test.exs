@@ -1,11 +1,11 @@
-defmodule SquatchMail.CaptureTest do
-  # Persistence happens on a Task spawned by SquatchMail.Capture.Recorder,
+defmodule SquatchMail.TelemetryCaptureTest do
+  # Persistence happens on a Task spawned by SquatchMail.TelemetryCapture.Recorder,
   # off the process that fires the telemetry event or calls Mailer.deliver/2,
   # so the sandbox connection needs to be shared rather than owned
   # exclusively by this test's process.
   use SquatchMail.DataCase, async: false
 
-  alias SquatchMail.{Capture, Tracker}
+  alias SquatchMail.{TelemetryCapture, Tracker}
 
   defmodule TestMailer do
     use Swoosh.Mailer, otp_app: :squatch_mail
@@ -18,8 +18,8 @@ defmodule SquatchMail.CaptureTest do
     # the real handler for the whole test run; re-attaching here is harmless
     # (attach/0 detaches first) and keeps this test file meaningful even if
     # run in isolation.
-    Capture.attach()
-    on_exit(fn -> Capture.attach() end)
+    TelemetryCapture.attach()
+    on_exit(fn -> TelemetryCapture.attach() end)
     :ok
   end
 
@@ -87,7 +87,7 @@ defmodule SquatchMail.CaptureTest do
       assert recorded
       # Swoosh.Adapters.Test returns {:ok, %{}} — no message_id available,
       # so a genuinely successful send with no id still lands as "captured"
-      # rather than "sent" (see Capture.status_for/2).
+      # rather than "sent" (see TelemetryCapture.status_for/2).
       assert recorded.status == "captured"
       assert recorded.from_email == "sender@example.com"
       assert recorded.from_name == "Sender"
@@ -240,7 +240,7 @@ defmodule SquatchMail.CaptureTest do
     end
 
     test "sample_rate 0.0 captures nothing" do
-      Application.put_env(:squatch_mail, :capture, sample_rate: 0.0)
+      Application.put_env(:squatch_mail, :sample_rate, 0.0)
       subject = "Sampled out #{System.unique_integer([:positive])}"
 
       :telemetry.execute(
@@ -252,11 +252,12 @@ defmodule SquatchMail.CaptureTest do
       Process.sleep(50)
       refute Tracker.list_emails(%{limit: 1000}) |> Enum.any?(&(&1.subject == subject))
     after
-      Application.delete_env(:squatch_mail, :capture)
+      Application.delete_env(:squatch_mail, :sample_rate)
     end
 
     test "store_html: false and store_text: false persist nil bodies but keep metadata" do
-      Application.put_env(:squatch_mail, :capture, store_html: false, store_text: false)
+      Application.put_env(:squatch_mail, :store_html, false)
+      Application.put_env(:squatch_mail, :store_text, false)
       subject = "No body storage #{System.unique_integer([:positive])}"
 
       :telemetry.execute(
@@ -271,13 +272,14 @@ defmodule SquatchMail.CaptureTest do
       assert recorded.text_body == nil
       assert recorded.from_email == "sender@example.com"
     after
-      Application.delete_env(:squatch_mail, :capture)
+      Application.delete_env(:squatch_mail, :store_html)
+      Application.delete_env(:squatch_mail, :store_text)
     end
   end
 
   describe "queue overflow (Recorder backpressure)" do
     test "drops captures and emits [:squatch_mail, :capture, :dropped] when max_queue is exceeded" do
-      Application.put_env(:squatch_mail, :capture, max_queue: 0)
+      Application.put_env(:squatch_mail, :max_queue, 0)
 
       test_pid = self()
 
@@ -305,11 +307,12 @@ defmodule SquatchMail.CaptureTest do
       refute Tracker.list_emails(%{limit: 1000}) |> Enum.any?(&(&1.subject == subject))
     after
       :telemetry.detach("capture-overflow-test")
-      Application.delete_env(:squatch_mail, :capture)
+      Application.delete_env(:squatch_mail, :max_queue)
     end
 
     test "never runs more than :max_concurrency persists at once" do
-      Application.put_env(:squatch_mail, :capture, max_concurrency: 1, max_queue: 10_000)
+      Application.put_env(:squatch_mail, :max_concurrency, 1)
+      Application.put_env(:squatch_mail, :max_queue, 10_000)
 
       tag = System.unique_integer([:positive])
 
@@ -331,7 +334,9 @@ defmodule SquatchMail.CaptureTest do
       # even while 5 captures are still draining through it one at a time.
       max_observed_in_flight =
         Enum.reduce(1..50, 0, fn _, acc ->
-          %{state: %{in_flight: in_flight}} = :sys.get_state(SquatchMail.Capture.Recorder)
+          %{state: %{in_flight: in_flight}} =
+            :sys.get_state(SquatchMail.TelemetryCapture.Recorder)
+
           Process.sleep(2)
           max(acc, map_size(in_flight))
         end)
@@ -346,7 +351,8 @@ defmodule SquatchMail.CaptureTest do
         if count == 5, do: count
       end)
     after
-      Application.delete_env(:squatch_mail, :capture)
+      Application.delete_env(:squatch_mail, :max_concurrency)
+      Application.delete_env(:squatch_mail, :max_queue)
     end
   end
 end
