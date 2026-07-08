@@ -17,7 +17,7 @@ defmodule SquatchMail.Email do
   @primary_key {:id, :id, autogenerate: true}
   @foreign_key_type :id
 
-  @statuses ~w(captured sent delivered opened clicked bounced complained rejected delayed failed)
+  @statuses ~w(captured sent delivered opened clicked bounced complained rejected delayed failed suppressed)
 
   @type t :: %__MODULE__{}
 

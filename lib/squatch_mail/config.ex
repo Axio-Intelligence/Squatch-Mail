@@ -13,7 +13,15 @@ defmodule SquatchMail.Config do
           store_html: true,
           store_text: true,
           sample_rate: 1.0,
-          max_queue: 10_000
+          max_queue: 10_000,
+          max_concurrency: 50
+        ],
+        guard: [
+          complaint_rate_pause: true,
+          complaint_rate_threshold: 0.001,
+          complaint_rate_window_days: 30,
+          min_volume: 100,
+          prune_interval_ms: :timer.hours(24)
         ]
 
   ## Options
@@ -46,6 +54,33 @@ defmodule SquatchMail.Config do
           it starts dropping new captures (and emitting
           `[:squatch_mail, :capture, :dropped]`) rather than let the queue
           grow unbounded under a burst. Defaults to `10_000`.
+        * `:max_concurrency` - the maximum number of captures being
+          persisted to the database *at once*. Distinct from `:max_queue`:
+          `:max_queue` bounds how many captures can be *waiting*, while
+          `:max_concurrency` bounds how many of those waiting captures are
+          simultaneously checking out a connection from the host's `Repo`
+          pool, so a burst can't itself exhaust that pool. Defaults to `50`.
+    * `:guard` - options for `SquatchMail.Guard`, a keyword list:
+        * `:complaint_rate_pause` - whether the complaint-rate circuit
+          breaker is active at all. Defaults to `true`; set to `false` to
+          disable it entirely (suppression checks still run).
+        * `:complaint_rate_threshold` - the fraction (`0.0`..`1.0`) of sent
+          emails, over the trailing `:complaint_rate_window_days`, that have
+          been complained about before `SquatchMail.Guard` auto-pauses
+          sending. Defaults to `0.001` (`0.1%`), matching SES's own
+          account-suspension threshold.
+        * `:complaint_rate_window_days` - the trailing window, in days, the
+          complaint rate is computed over. Defaults to `30`.
+        * `:min_volume` - the minimum number of sent emails in the trailing
+          window before the complaint-rate breaker can trip. Defaults to
+          `100`, so e.g. 1 complaint out of 5 sends doesn't falsely read as
+          a 20% complaint rate.
+        * `:prune_interval_ms` - retained for backwards compatibility; prefer
+          `:pruner`'s `:interval` below.
+    * `:pruner` - options for `SquatchMail.Pruner`, a keyword list:
+        * `:interval` - how often, in milliseconds, the pruner calls
+          `SquatchMail.Tracker.prune/0`. Defaults to 6 hours.
+        * `:enabled` - whether the pruner runs at all. Defaults to `true`.
   """
 
   @default_prefix "squatch_mail"
@@ -95,7 +130,13 @@ defmodule SquatchMail.Config do
     !!Application.get_env(:squatch_mail, :enabled, true)
   end
 
-  @default_capture [store_html: true, store_text: true, sample_rate: 1.0, max_queue: 10_000]
+  @default_capture [
+    store_html: true,
+    store_text: true,
+    sample_rate: 1.0,
+    max_queue: 10_000,
+    max_concurrency: 50
+  ]
 
   @doc """
   Returns a single capture option, falling back to its default when the host
@@ -141,4 +182,106 @@ defmodule SquatchMail.Config do
   """
   @spec max_queue() :: non_neg_integer()
   def max_queue, do: capture(:max_queue)
+
+  @doc """
+  Returns the maximum number of captures `SquatchMail.Capture.Recorder`
+  will persist to the database concurrently.
+
+  Defaults to `50`.
+  """
+  @spec max_concurrency() :: pos_integer()
+  def max_concurrency, do: capture(:max_concurrency)
+
+  @default_guard [
+    complaint_rate_pause: true,
+    complaint_rate_threshold: 0.001,
+    complaint_rate_window_days: 30,
+    min_volume: 100,
+    prune_interval_ms: :timer.hours(24)
+  ]
+
+  @doc """
+  Returns a single guard option, falling back to its default when the host
+  hasn't configured `:guard` at all, or has configured it but omitted this
+  particular key.
+  """
+  @spec guard(atom()) :: term()
+  def guard(key) when is_atom(key) do
+    configured = Application.get_env(:squatch_mail, :guard, [])
+    Keyword.get(configured, key, Keyword.fetch!(@default_guard, key))
+  end
+
+  @doc """
+  Returns the complaint-rate fraction (`0.0`..`1.0`) at or above which
+  `SquatchMail.Guard` blocks sending.
+
+  Defaults to `0.001` (`0.1%`).
+  """
+  @spec complaint_rate_threshold() :: float()
+  def complaint_rate_threshold, do: guard(:complaint_rate_threshold) * 1.0
+
+  @doc """
+  Returns the trailing window, in days, the complaint rate is computed over.
+
+  Defaults to `30`.
+  """
+  @spec complaint_rate_window_days() :: pos_integer()
+  def complaint_rate_window_days, do: guard(:complaint_rate_window_days)
+
+  @doc """
+  Returns how often, in milliseconds, `SquatchMail.Guard.Pruner` runs
+  `SquatchMail.Tracker.prune/0`.
+
+  Defaults to 24 hours.
+  """
+  @spec prune_interval_ms() :: pos_integer()
+  def prune_interval_ms, do: guard(:prune_interval_ms)
+
+  @doc """
+  Returns whether `SquatchMail.Guard`'s complaint-rate circuit breaker is
+  active.
+
+  Defaults to `true`.
+  """
+  @spec complaint_rate_pause?() :: boolean()
+  def complaint_rate_pause?, do: !!guard(:complaint_rate_pause)
+
+  @doc """
+  Returns the minimum number of sent emails in the trailing window required
+  before the complaint-rate breaker can trip.
+
+  Defaults to `100`.
+  """
+  @spec complaint_rate_min_volume() :: non_neg_integer()
+  def complaint_rate_min_volume, do: guard(:min_volume)
+
+  @default_pruner [interval: :timer.hours(6), enabled: true]
+
+  @doc """
+  Returns a single pruner option, falling back to its default when the host
+  hasn't configured `:pruner` at all, or has configured it but omitted this
+  particular key.
+  """
+  @spec pruner(atom()) :: term()
+  def pruner(key) when is_atom(key) do
+    configured = Application.get_env(:squatch_mail, :pruner, [])
+    Keyword.get(configured, key, Keyword.fetch!(@default_pruner, key))
+  end
+
+  @doc """
+  Returns how often, in milliseconds, `SquatchMail.Pruner` runs
+  `SquatchMail.Tracker.prune/0`.
+
+  Defaults to 6 hours.
+  """
+  @spec pruner_interval_ms() :: pos_integer()
+  def pruner_interval_ms, do: pruner(:interval)
+
+  @doc """
+  Returns whether `SquatchMail.Pruner` runs at all.
+
+  Defaults to `true`.
+  """
+  @spec pruner_enabled?() :: boolean()
+  def pruner_enabled?, do: !!pruner(:enabled)
 end

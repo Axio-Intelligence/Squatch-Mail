@@ -13,10 +13,13 @@ defmodule SquatchMail.Application do
       # Persists captured emails off the caller's process (see
       # SquatchMail.Capture's moduledoc for why this must never block or
       # raise in the process that called Mailer.deliver/2).
-      SquatchMail.Capture.Recorder
+      SquatchMail.Capture.Recorder,
 
-      # TODO: start the retention/pruning worker here once suppression +
-      # retention policies land.
+      # Periodically prunes emails/events/webhook_logs per retention_days
+      # (see SquatchMail.Pruner's moduledoc). Runs on a timer regardless of
+      # :enabled so it can be toggled at runtime without a restart; the
+      # first prune waits a full interval rather than firing at boot.
+      SquatchMail.Pruner
     ]
 
     with {:ok, pid} <- Supervisor.start_link(children, strategy: :one_for_one, name: __MODULE__) do

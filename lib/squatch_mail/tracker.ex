@@ -540,17 +540,27 @@ defmodule SquatchMail.Tracker do
   ## Retention / pruning
   ## ---------------------------------------------------------------------------
 
+  # Webhook audit logs are pure ingestion history (not user-facing engagement
+  # data), so they age out on a fixed window rather than the configurable
+  # per-source `retention_days` emails/events use.
+  @webhook_log_retention_days 30
+
   @doc """
   Prunes data older than the source's `retention_days`.
 
   Deletes `emails` whose `inserted_at` is older than the cutoff (cascading to
   recipients/attachments and nilifying events via foreign keys), then deletes
   now-orphaned `email_events` (with `nil` email_id) whose `occurred_at` is older
-  than the cutoff.
+  than the cutoff. Also deletes `webhook_logs` older than a fixed 30-day
+  window, independent of `retention_days`.
 
-  Returns `%{emails: count, events: count}`.
+  Returns `%{emails: count, events: count, webhook_logs: count}`.
   """
-  @spec prune() :: %{emails: non_neg_integer(), events: non_neg_integer()}
+  @spec prune() :: %{
+          emails: non_neg_integer(),
+          events: non_neg_integer(),
+          webhook_logs: non_neg_integer()
+        }
   def prune do
     retention_days =
       case get_or_create_source() do
@@ -559,6 +569,9 @@ defmodule SquatchMail.Tracker do
       end
 
     cutoff = DateTime.add(DateTime.utc_now(), -retention_days * 86_400, :second)
+
+    webhook_log_cutoff =
+      DateTime.add(DateTime.utc_now(), -@webhook_log_retention_days * 86_400, :second)
 
     {emails_deleted, _} =
       from(e in Email, where: e.inserted_at < ^cutoff)
@@ -570,7 +583,11 @@ defmodule SquatchMail.Tracker do
       )
       |> repo().delete_all()
 
-    %{emails: emails_deleted, events: events_deleted}
+    {webhook_logs_deleted, _} =
+      from(w in WebhookLog, where: w.inserted_at < ^webhook_log_cutoff)
+      |> repo().delete_all()
+
+    %{emails: emails_deleted, events: events_deleted, webhook_logs: webhook_logs_deleted}
   end
 
   ## ---------------------------------------------------------------------------

@@ -218,6 +218,11 @@ defmodule SquatchMail.Capture do
 
   defp status_for(nil, nil), do: "captured"
   defp status_for(_message_id, nil), do: "sent"
+  # A blocked SquatchMail.Adapters.Watchtower send surfaces its
+  # SquatchMail.Guard block reason as the telemetry :error, so it's recorded
+  # as "suppressed" rather than lumped in with genuine adapter failures.
+  defp status_for(_message_id, {:suppressed, _addresses}), do: "suppressed"
+  defp status_for(_message_id, :complaint_rate_paused), do: "suppressed"
   defp status_for(_message_id, _error), do: "failed"
 
   defp recipients(email) do
