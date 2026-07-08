@@ -59,8 +59,8 @@ If you'd rather not use igniter, or want full control over each step:
    defmodule MyApp.Repo.Migrations.AddSquatchMail do
      use Ecto.Migration
 
-     def up, do: SquatchMail.Migrations.up(version: 1)
-     def down, do: SquatchMail.Migrations.down(version: 1)
+     def up, do: SquatchMail.Migrations.up()
+     def down, do: SquatchMail.Migrations.down()
    end
    ```
 

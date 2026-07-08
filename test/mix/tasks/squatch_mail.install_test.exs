@@ -27,7 +27,7 @@ defmodule Mix.Tasks.SquatchMail.InstallTest do
       migration_content = Rewrite.Source.get(migration_source, :content)
 
       assert migration_content =~ "SquatchMail.Migrations.up()"
-      assert migration_content =~ "SquatchMail.Migrations.down(version: 1)"
+      assert migration_content =~ "SquatchMail.Migrations.down()"
 
       igniter
       |> assert_has_patch("lib/test_web/router.ex", """

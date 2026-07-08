@@ -120,7 +120,7 @@ if Code.ensure_loaded?(Igniter) do
     defp set_up_database(igniter, repo) do
       migration_body = """
       def up, do: SquatchMail.Migrations.up()
-      def down, do: SquatchMail.Migrations.down(version: 1)
+      def down, do: SquatchMail.Migrations.down()
       """
 
       Igniter.Libs.Ecto.gen_migration(igniter, repo, "add_squatch_mail",
