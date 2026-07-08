@@ -307,5 +307,46 @@ defmodule SquatchMail.CaptureTest do
       :telemetry.detach("capture-overflow-test")
       Application.delete_env(:squatch_mail, :capture)
     end
+
+    test "never runs more than :max_concurrency persists at once" do
+      Application.put_env(:squatch_mail, :capture, max_concurrency: 1, max_queue: 10_000)
+
+      tag = System.unique_integer([:positive])
+
+      for n <- 1..5 do
+        :telemetry.execute(
+          [:swoosh, :deliver, :stop],
+          %{duration: 1},
+          %{
+            email: email(subject: "Concurrency #{tag}-#{n}"),
+            mailer: TestMailer,
+            config: [],
+            result: %{}
+          }
+        )
+      end
+
+      # Poll the Recorder's own state rather than sleep-and-hope: at every
+      # observation, in-flight work must never exceed the configured cap,
+      # even while 5 captures are still draining through it one at a time.
+      max_observed_in_flight =
+        Enum.reduce(1..50, 0, fn _, acc ->
+          %{state: %{in_flight: in_flight}} = :sys.get_state(SquatchMail.Capture.Recorder)
+          Process.sleep(2)
+          max(acc, map_size(in_flight))
+        end)
+
+      assert max_observed_in_flight <= 1
+
+      eventually(fn ->
+        count =
+          Tracker.list_emails(%{limit: 1000})
+          |> Enum.count(&String.starts_with?(&1.subject, "Concurrency #{tag}-"))
+
+        if count == 5, do: count
+      end)
+    after
+      Application.delete_env(:squatch_mail, :capture)
+    end
   end
 end
