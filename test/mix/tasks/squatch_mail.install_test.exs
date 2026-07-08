@@ -1,7 +1,31 @@
 defmodule Mix.Tasks.SquatchMail.InstallTest do
-  use ExUnit.Case, async: true
+  # async: false + env snapshot/restore: Igniter's test project machinery
+  # evaluates the patched host config into this VM's application env, which
+  # transiently rewrites :squatch_mail keys (e.g. `repo: Test.Repo`) that
+  # concurrently-running tests read through SquatchMail.Config. Serializing
+  # this module and restoring the env after each test keeps that mutation
+  # from poisoning the rest of the suite.
+  use ExUnit.Case, async: false
 
   import Igniter.Test
+
+  setup do
+    snapshot = Application.get_all_env(:squatch_mail)
+
+    on_exit(fn ->
+      current = Application.get_all_env(:squatch_mail)
+
+      for {key, _} <- current, not Keyword.has_key?(snapshot, key) do
+        Application.delete_env(:squatch_mail, key)
+      end
+
+      for {key, value} <- snapshot do
+        Application.put_env(:squatch_mail, key, value)
+      end
+    end)
+
+    :ok
+  end
 
   describe "squatch_mail.install" do
     test "configures the app, generates a migration, and mounts the dashboard" do
