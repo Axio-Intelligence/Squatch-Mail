@@ -66,4 +66,12 @@ jobs:
 
       - run: mix compile --warnings-as-errors
 
+      # mix.exs defines an "assets.build" alias (esbuild squatch_mail +
+      # squatch_mail.copy_css), but esbuild is declared `only: :dev` — the
+      # task genuinely doesn't exist under MIX_ENV=test (verified locally:
+      # `MIX_ENV=test mix assets.build` fails with "The task \"esbuild\"
+      # could not be found"). mix test doesn't need built assets (the
+      # asset controller falls back gracefully when priv/static is
+      # missing), so there's nothing to run here for the test matrix.
+
       - run: mix test
