@@ -8,7 +8,8 @@ defmodule SquatchMail.Config do
         repo: MyApp.Repo,
         otp_app: :my_app,
         prefix: "squatch_mail",
-        enabled: true
+        enabled: true,
+        sample_rate: 1.0
 
   ## Options
 
@@ -23,6 +24,11 @@ defmodule SquatchMail.Config do
     * `:enabled` - whether SquatchMail's capture/ingestion machinery is
       active. Defaults to `true`. Useful for disabling SquatchMail in
       specific environments (e.g. test) without removing its configuration.
+    * `:sample_rate` - the fraction (`0.0`..`1.0`) of outgoing emails the
+      telemetry capture engine persists. Defaults to `1.0` (capture every
+      send). Lower this for very high-volume mailers where full capture would
+      be too much write load; `1.0` and `0.0` are treated as exact (no random
+      sampling overhead at the extremes).
   """
 
   @default_prefix "squatch_mail"
@@ -70,5 +76,15 @@ defmodule SquatchMail.Config do
   @spec enabled?() :: boolean()
   def enabled? do
     !!Application.get_env(:squatch_mail, :enabled, true)
+  end
+
+  @doc """
+  Returns the configured sample rate for the telemetry capture engine.
+
+  Defaults to `1.0`.
+  """
+  @spec sample_rate() :: float()
+  def sample_rate do
+    Application.get_env(:squatch_mail, :sample_rate, 1.0) * 1.0
   end
 end
