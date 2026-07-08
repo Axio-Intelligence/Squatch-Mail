@@ -220,6 +220,7 @@ defmodule Mix.Tasks.SquatchMail.InstallTest do
       |> refute_creates("lib/test_web/squatch_mail_body_reader.ex")
       |> assert_has_notice(&(&1 =~ "could not automatically wire up the raw body reader"))
       |> assert_has_notice(&(&1 =~ "teach your endpoint to preserve the evidence yourself"))
+      |> assert_has_notice(&(&1 =~ "could NOT wire up your endpoint's webhook raw-body"))
     end
 
     test "an endpoint whose Plug.Parsers already has a different, unrecognized body_reader is left untouched" do

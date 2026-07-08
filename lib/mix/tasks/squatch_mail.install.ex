@@ -258,8 +258,18 @@ if Code.ensure_loaded?(Igniter) do
       )
     end
 
+    # `Igniter.Code.Common.nodes_equal?/2` compares AST structurally,
+    # including position metadata — the real, already-patched value in a
+    # file is wrapped in an extra `{:__block__, meta, [...]}` layer (added by
+    # Igniter's own keyword-list machinery when it *sets* a value) with
+    # metadata from wherever it lives in the file, so it never structurally
+    # matches AST freshly parsed from a string at line 1. Comparing the
+    # `Sourceror.to_string/1` output of both sides instead is robust to that
+    # — it's exactly the "does this already say what we'd write" check we
+    # actually want for idempotence, not an AST-identity check.
     defp nodes_equal_to_reader?(value_zipper, reader_module) do
-      Igniter.Code.Common.nodes_equal?(value_zipper, reader_value_ast(reader_module))
+      Sourceror.to_string(value_zipper.node) ==
+        Sourceror.to_string(reader_value_ast(reader_module))
     end
 
     defp ensure_body_reader_module(igniter, reader_module, path_segments) do

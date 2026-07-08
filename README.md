@@ -170,8 +170,10 @@ mix igniter.install squatch_mail
 ```
 
 This adds `:squatch_mail` to `mix.exs`, configures it in `config.exs`,
-generates the migration that creates its tables, and mounts the dashboard in
-your router at `/squatch`.
+generates the migration that creates its tables, mounts the dashboard in
+your router at `/squatch`, and teaches your endpoint to preserve the raw
+bytes SNS webhook signatures need (see step 5 of the manual path below for
+what this actually does, and why it's the one thing that can't be avoided).
 
 ### Manual installation
 
@@ -243,6 +245,49 @@ If you'd rather not use igniter, or want full control over each step:
    SquatchMail observes mail sent through Swoosh automatically via
    telemetry, and this step is safe to add now even before the dashboard
    pages themselves land.
+
+5. **Teach your endpoint to preserve the evidence.** SquatchMail's SNS
+   webhook needs the *exact bytes* SNS sent to verify the request's
+   signature — but by the time a router (including `squatch_mail_dashboard`'s
+   own macro) sees a request, your endpoint's `Plug.Parsers` has already read
+   and discarded the raw body. `Plug.Parsers`'s `:body_reader` option is
+   endpoint-wide, not per-route, so this is the one piece of wiring the
+   installer/router genuinely cannot do for you — it has to happen in your
+   own `endpoint.ex`, *before* the router plug:
+
+   ```elixir
+   # in your endpoint.ex
+   defmodule MyAppWeb.SquatchMailBodyReader do
+     @path_segments ["squatch"]
+
+     def read_body(conn, opts) do
+       if match?(^@path_segments ++ ["webhooks", "sns", _token], conn.path_info) do
+         SquatchMail.SNS.RawBodyReader.read_body(conn, opts)
+       else
+         Plug.Conn.read_body(conn, opts)
+       end
+     end
+   end
+
+   plug Plug.Parsers,
+     parsers: [:urlencoded, :multipart, :json],
+     pass: ["*/*"],
+     json_decoder: Phoenix.json_library(),
+     body_reader: {MyAppWeb.SquatchMailBodyReader, :read_body, []}
+   ```
+
+   Adjust `@path_segments` if you mounted the dashboard somewhere other than
+   `/squatch`. Skip this step and every real SNS notification will fail
+   signature verification — the webhook falls back to re-encoding the parsed
+   params as JSON, which isn't byte-identical to what SNS sent.
+
+   `mix igniter.install squatch_mail` does this step for you automatically
+   (it generates the reader module and patches your endpoint's
+   `Plug.Parsers` call) when your endpoint looks like a standard `mix
+   phx.new` endpoint. If your `Plug.Parsers` options aren't a plain literal
+   keyword list, or you already have a different `:body_reader` configured,
+   the installer won't guess — it leaves your endpoint untouched and prints
+   this exact snippet as a notice instead.
 
    **Read the "Keeping the Forest Safe" section below before you deploy
    this anywhere but your own laptop.**
