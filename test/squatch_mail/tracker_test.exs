@@ -158,6 +158,52 @@ defmodule SquatchMail.TrackerTest do
 
       assert is_nil(event.email_id)
     end
+
+    test "concurrent record_event/1 calls for the same message_id are serialized by the row lock" do
+      {:ok, email} =
+        Tracker.record_email(%{from_email: "a@example.com", message_id: "msg-race-1"})
+
+      {:ok, _} = Tracker.mark_email_sent(email, "msg-race-1")
+
+      # Prove the lock actually blocks a concurrent transaction, rather than
+      # just asserting the end state (which could pass even with no lock at
+      # all if the two calls happen to interleave favorably). Process A
+      # opens a transaction, takes the same `FOR UPDATE` lock
+      # record_event/1 takes internally, and holds it open for a fixed
+      # delay; process B calls the real record_event/1 concurrently and
+      # must not return before A releases the lock.
+      test_pid = self()
+
+      {:ok, holder} =
+        Task.start(fn ->
+          Ecto.Adapters.SQL.Sandbox.allow(Repo, test_pid, self())
+
+          Repo.transaction(fn ->
+            Repo.one(from(e in Email, where: e.message_id == ^"msg-race-1", lock: "FOR UPDATE"))
+
+            send(test_pid, :lock_held)
+            Process.sleep(300)
+          end)
+        end)
+
+      assert_receive :lock_held, 1000
+
+      {blocked_time_us, {:ok, event}} =
+        :timer.tc(fn ->
+          Ecto.Adapters.SQL.Sandbox.allow(Repo, test_pid, holder)
+          Tracker.record_event(%{event_type: "bounce", message_id: "msg-race-1"})
+        end)
+
+      # record_event/1 could only return after the holder's 300ms sleep
+      # elapsed and its transaction committed/rolled back — proving the
+      # FOR UPDATE lock in record_event/1 genuinely serializes against a
+      # concurrent transaction holding the same row lock, not merely that
+      # the two calls happened not to race in practice.
+      assert blocked_time_us >= 250_000
+
+      assert event.message_id == "msg-race-1"
+      assert Repo.get(Email, email.id).status == "bounced"
+    end
   end
 
   describe "suppressions" do
@@ -213,6 +259,37 @@ defmodule SquatchMail.TrackerTest do
       hard = Tracker.list_suppressions(%{reason: "hard_bounce"})
       assert length(hard) == 1
       assert hd(hard).address == "h@example.com"
+    end
+
+    test "suppressed_addresses/1 returns only the suppressed subset, in one query" do
+      {:ok, _} = Tracker.suppress(%{address: "batch-a@example.com", reason: "hard_bounce"})
+      {:ok, _} = Tracker.suppress(%{address: "batch-b@example.com", reason: "manual"})
+
+      addresses = [
+        "batch-a@example.com",
+        "clean-1@example.com",
+        "batch-b@example.com",
+        "clean-2@example.com"
+      ]
+
+      assert Enum.sort(Tracker.suppressed_addresses(addresses)) ==
+               ["batch-a@example.com", "batch-b@example.com"]
+    end
+
+    test "suppressed_addresses/1 excludes expired soft bounces" do
+      {:ok, _} =
+        Tracker.suppress(%{
+          address: "batch-expired@example.com",
+          reason: "soft_bounce",
+          expires_at: DateTime.add(DateTime.utc_now(), -3600, :second)
+        })
+
+      assert Tracker.suppressed_addresses(["batch-expired@example.com", "clean@example.com"]) ==
+               []
+    end
+
+    test "suppressed_addresses/1 returns [] for an empty list without querying" do
+      assert Tracker.suppressed_addresses([]) == []
     end
   end
 

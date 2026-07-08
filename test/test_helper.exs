@@ -5,6 +5,13 @@ repo.__adapter__().storage_up(repo.config())
 
 {:ok, _pid} = repo.start_link()
 
+# See SquatchMail.Test.UnsandboxedRepo's moduledoc: a second, non-sandboxed
+# connection to the same database, used only by the migration-upgrade test
+# in migrations_test.exs so it can drive Ecto.Migrator without flipping
+# SquatchMail.Test.Repo's sandbox mode (which would affect every other
+# concurrently-running test).
+{:ok, _pid} = SquatchMail.Test.UnsandboxedRepo.start_link()
+
 # Rebuild SquatchMail's schema from scratch on every run. Recreating the whole
 # `squatch_mail` schema is simpler to reason about than partial-version
 # detection for a throwaway test database. The migration is driven through

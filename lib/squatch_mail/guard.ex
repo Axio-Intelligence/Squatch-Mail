@@ -8,8 +8,9 @@ defmodule SquatchMail.Guard do
 
     * **Suppression** - any recipient address with an active suppression
       row (hard bounce, soft bounce not yet expired, complaint, or manual).
-      See `SquatchMail.Tracker.suppressed?/1` / `list_suppressions/1` for how
-      "active" is defined (`expires_at IS NULL OR expires_at > now()`).
+      See `SquatchMail.Tracker.suppressed_addresses/1` / `list_suppressions/1`
+      for how "active" is defined (`expires_at IS NULL OR expires_at >
+      now()`).
     * **Complaint-rate auto-pause** - if the fraction of sent emails
       complained about, over the trailing
       `SquatchMail.Config.complaint_rate_window_days/0` days, is at or above
@@ -29,15 +30,16 @@ defmodule SquatchMail.Guard do
 
   ## Performance note
 
-  `check/1` runs one query for suppressions (`WHERE address IN (...) AND
-  (expires_at IS NULL OR expires_at > now())`) and, when the breaker is
-  enabled, one aggregate query for the complaint rate — every call, no
-  caching. For a proxy adapter sitting in the hot send path this means two
-  extra round trips per send (one, if the address list is empty and the
-  rate check is disabled). That's an accepted cost for correctness today;
-  if it shows up in profiling, the complaint rate is the obvious candidate
-  to cache (e.g. recomputed on a timer rather than per-send) since it only
-  needs to change a few times a day, not per-request.
+  `check/1` runs one query for suppressions (`Tracker.suppressed_addresses/1`,
+  `WHERE address IN (...) AND (expires_at IS NULL OR expires_at > now())`
+  — a single round trip regardless of recipient count) and, when the
+  breaker is enabled, one aggregate query for the complaint rate — every
+  call, no caching. For a proxy adapter sitting in the hot send path this
+  means two extra round trips per send (one, if the address list is empty
+  and the rate check is disabled). That's an accepted cost for correctness
+  today; if it shows up in profiling, the complaint rate is the obvious
+  candidate to cache (e.g. recomputed on a timer rather than per-send)
+  since it only needs to change a few times a day, not per-request.
   """
 
   import Ecto.Query
@@ -140,7 +142,7 @@ defmodule SquatchMail.Guard do
       addresses
       |> Enum.reject(&is_nil/1)
       |> Enum.uniq()
-      |> Enum.filter(&Tracker.suppressed?/1)
+      |> Tracker.suppressed_addresses()
 
     case suppressed do
       [] -> :ok

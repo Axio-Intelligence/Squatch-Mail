@@ -193,6 +193,18 @@ defmodule SquatchMail.Tracker do
   exists, the event's `email_id` is set and the email's status is advanced per
   the event-type mapping using `next_status/2` (never regressing).
 
+  The matching email (if any) is re-fetched and row-locked (`SELECT ... FOR
+  UPDATE`) *inside* the transaction, immediately before computing the status
+  advance. This matters because SNS can deliver more than one notification
+  for the same `message_id` close together (e.g. a bounce and a complaint
+  arriving within milliseconds of each other, or a plain redelivered retry):
+  without the lock, two concurrent `record_event/1` calls could both read
+  the same starting status, both compute their own "next" status from it,
+  and have the second commit silently overwrite the first's advancement.
+  The row lock serializes the two — the second call's `FOR UPDATE` blocks
+  until the first transaction commits, then reads the *already-advanced*
+  status, so both events still land correctly relative to each other.
+
   Returns `{:ok, event}` (with `email_id` set when linked) or
   `{:error, changeset}`.
   """
@@ -200,13 +212,16 @@ defmodule SquatchMail.Tracker do
   def record_event(attrs) do
     attrs = normalize_keys(attrs)
     message_id = Map.get(attrs, :message_id)
-    email = message_id && find_email_by_message_id(message_id)
-
-    attrs = if email, do: Map.put(attrs, :email_id, email.id), else: attrs
 
     Multi.new()
-    |> Multi.insert(:event, EmailEvent.changeset(%EmailEvent{}, attrs))
-    |> Multi.merge(fn _changes -> maybe_advance_status(email, attrs) end)
+    |> Multi.run(:locked_email, fn repo, _changes ->
+      {:ok, message_id && lock_email_by_message_id(repo, message_id)}
+    end)
+    |> Multi.insert(:event, fn %{locked_email: email} ->
+      event_attrs = if email, do: Map.put(attrs, :email_id, email.id), else: attrs
+      EmailEvent.changeset(%EmailEvent{}, event_attrs)
+    end)
+    |> Multi.merge(fn %{locked_email: email} -> maybe_advance_status(email, attrs) end)
     |> repo().transaction()
     |> case do
       {:ok, %{event: event}} -> {:ok, event}
@@ -257,8 +272,13 @@ defmodule SquatchMail.Tracker do
 
   defp rank(status), do: Map.get(@status_rank, status, 0)
 
-  defp find_email_by_message_id(message_id) do
-    repo().one(from(e in Email, where: e.message_id == ^message_id, limit: 1))
+  # Used only from inside record_event/1's transaction, immediately before
+  # computing the status advance — see that function's moduledoc for why the
+  # lock matters. `lock: "FOR UPDATE"` blocks a concurrent caller racing on
+  # the same message_id until this transaction commits, so it observes the
+  # already-advanced status rather than the stale pre-race one.
+  defp lock_email_by_message_id(repo, message_id) do
+    repo.one(from(e in Email, where: e.message_id == ^message_id, limit: 1, lock: "FOR UPDATE"))
   end
 
   ## ---------------------------------------------------------------------------
@@ -300,6 +320,10 @@ defmodule SquatchMail.Tracker do
   Returns `true` if a non-expired suppression exists for the address.
 
   A suppression is active when `expires_at IS NULL` or `expires_at > now()`.
+
+  For checking many addresses at once (e.g. every recipient of a batch
+  send), prefer `suppressed_addresses/1` — one query for N addresses
+  instead of N queries.
   """
   @spec suppressed?(String.t()) :: boolean()
   def suppressed?(address) do
@@ -311,6 +335,30 @@ defmodule SquatchMail.Tracker do
         where: is_nil(s.expires_at) or s.expires_at > ^now
 
     repo().exists?(query)
+  end
+
+  @doc """
+  Returns the subset of `addresses` that carry an active (non-expired)
+  suppression, in a single query.
+
+  A suppression is active when `expires_at IS NULL` or `expires_at >
+  now()`, same as `suppressed?/1`. Returns `[]` immediately without
+  querying when `addresses` is empty.
+  """
+  @spec suppressed_addresses([String.t()]) :: [String.t()]
+  def suppressed_addresses([]), do: []
+
+  def suppressed_addresses(addresses) when is_list(addresses) do
+    now = DateTime.utc_now()
+
+    query =
+      from s in Suppression,
+        where: s.address in ^addresses,
+        where: is_nil(s.expires_at) or s.expires_at > ^now,
+        select: s.address,
+        distinct: true
+
+    repo().all(query)
   end
 
   @doc """

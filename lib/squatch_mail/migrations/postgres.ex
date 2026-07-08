@@ -12,7 +12,7 @@ defmodule SquatchMail.Migrations.Postgres do
   use Ecto.Migration
 
   @initial_version 1
-  @current_version 1
+  @current_version 2
 
   # The table whose COMMENT stores the applied version.
   @version_table "emails"

@@ -15,6 +15,20 @@ config :squatch_mail, SquatchMail.Test.Repo,
   pool_size: System.schedulers_online() * 2,
   log: false
 
+# Same physical database as SquatchMail.Test.Repo above, but a plain
+# (non-sandbox) pool — see SquatchMail.Test.UnsandboxedRepo's moduledoc for
+# why this exists (Ecto.Migrator needs a connection that isn't subject to
+# per-test sandbox ownership, without disturbing the sandboxed repo used by
+# every other test).
+config :squatch_mail, SquatchMail.Test.UnsandboxedRepo,
+  username: System.get_env("PGUSER", System.get_env("USER", "postgres")),
+  password: System.get_env("PGPASSWORD", ""),
+  hostname: System.get_env("PGHOST", "localhost"),
+  port: String.to_integer(System.get_env("PGPORT", "5432")),
+  database: "squatch_mail_test",
+  pool_size: 2,
+  log: false
+
 config :logger, level: :warning
 
 # Endpoint for the web-layer's own test support (test/support/web_endpoint.ex),
