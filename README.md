@@ -16,11 +16,18 @@
                             `-.______.-'
                              _|      |_
                             (_,       ,_)
+
+              /'-.       .-'\      /'-.       .-'\
+             /     '-. .-'    \   /     '-. .-'    \
+            '.        '        '.'         '       .'
 ```
 
 # SquatchMail
 
 **Big footprint. Tiny bill.**
+
+*The self-hosted Amazon SES dashboard for Elixir. Your emails are out
+there. SquatchMail finds them.*
 
 SquatchMail is a self-hosted Amazon SES email dashboard for Phoenix
 applications, shipped as an embeddable Hex package — the ErrorTracker / Oban
@@ -31,8 +38,9 @@ bounce and complaint handling, and a suppression list, all backed by tables
 that live quietly in their own Postgres schema inside your existing database.
 
 No queue to stand up. No Redis. No separate service to deploy, monitor, and
-eventually forget about. If your Phoenix app already talks to SES, SquatchMail
-is mostly just... there.
+eventually forget about. If your Phoenix app already talks to SES,
+SquatchMail is mostly just... there, the way a footprint is there whether or
+not you were looking for it.
 
 ## Why "Squatch"
 
@@ -50,7 +58,9 @@ not a religion the codebase practices.
 If a Sighting goes quiet in the woods, you'll know within a `COMMENT ON
 TABLE`-tracked schema migration.
 
-## What you get
+## FIELD EVIDENCE
+
+What the expedition has actually turned up so far:
 
 - **Zero-config send observability.** SquatchMail attaches to Swoosh's
   telemetry events (`[:swoosh, :deliver, :stop | :exception]`) at boot and
@@ -58,36 +68,97 @@ TABLE`-tracked schema migration.
   no adapter swap, no proxy, no code changes to your send path. This is the
   thing LaraSend and friends structurally cannot do, because they aren't
   living inside your BEAM node.
-- **SES event ingestion.** An SNS-backed webhook route (mounted for you,
-  hand-verified signatures, no `ex_aws` dependency) turns delivery, bounce,
-  complaint, open, click, reject, and delay notifications into a per-email
-  timeline of Footprints, and automatically maintains your suppression list
-  (hard bounces and complaints are permanent; soft bounces expire).
+- **SES event ingestion.** An SNS-backed webhook pipeline (hand-verified
+  SigV1/SigV2 signatures against `:public_key`, no `ex_aws` dependency) turns
+  delivery, bounce, complaint, open, click, reject, and delay notifications
+  into a per-email timeline of Footprints, and automatically maintains your
+  suppression list (hard bounces and complaints are permanent; soft bounces
+  expire). Every inbound payload is logged for audit regardless of outcome.
 - **One-click SES provisioning.** "Connect SES" from Base Camp creates the
   configuration set, SNS topic, HTTPS subscription, and event destination for
   you via `AWS.SESv2`/`AWS.SNS` — the manual afternoon LaraSend asks you to
   spend in the AWS console, done from a button.
 - **Identity + DKIM guidance.** List your sending identities, see
   verification and DKIM status, and get copy-paste DNS records (CNAME for
-  DKIM, TXT for SPF/DMARC) instead of AWS's own documentation tabs.
-  Quota sync, cached for six hours, so Base Camp doesn't hammer `GetAccount`
-  on every page load.
-- **A real dashboard, not a log tail.** LiveView-native activity feed with
-  live updates, per-email inspector (rendered HTML preview, headers, tags,
-  Footprint timeline), suppression management, and retention-based pruning —
-  all shipped as precompiled, self-contained assets. Your host app's asset
-  pipeline never needs to know SquatchMail exists.
-- **Your database, your rules.** Every table lives inside its own `squatch_mail`
-  Postgres schema (configurable), versioned and migrated the same way
-  Oban and ErrorTracker do it — one host-owned migration file that calls
-  `SquatchMail.Migrations.up()`, safe to re-run as new versions ship.
+  DKIM, TXT for SPF/DMARC) instead of AWS's own documentation tabs. Quota
+  sync, cached for six hours, so Base Camp doesn't hammer `GetAccount` on
+  every page load.
+- **Status that only ever tells the truth.** A later, weaker event can never
+  quietly downgrade an email's status — a delivery notification arriving
+  after a click is recorded as a Footprint but doesn't un-click the email,
+  and bounces/complaints/rejections always win outright. See
+  `SquatchMail.Tracker.next_status/2` if you want to see the ranking.
+- **Guardrails, not just observation.** `SquatchMail.Guard` checks every
+  send against the suppression list and a complaint-rate circuit breaker
+  (auto-pauses sending at a 0.1% complaint rate by default — SES's own
+  account-suspension threshold — with a minimum-volume floor so five sends
+  and one complaint doesn't read as a 20% rate). Most hosts only need
+  `SquatchMail.Capture`'s pure observation, but `SquatchMail.Adapters.Watchtower`
+  is an opt-in Swoosh adapter for hosts who want a suppressed recipient or
+  an auto-paused account to actually block the send, not just get recorded
+  after the fact.
+- **It cleans up after itself.** `SquatchMail.Pruner` runs
+  `SquatchMail.Tracker.prune/0` on a timer (six hours by default), deleting
+  emails and their footprints past your configured `retention_days` and
+  webhook audit logs past a fixed 30-day window, so the forest doesn't just
+  keep accumulating footprints forever.
+- **Your database, your rules.** Every table lives inside its own
+  `squatch_mail` Postgres schema (configurable), versioned and migrated the
+  same way Oban and ErrorTracker do it — one host-owned migration file that
+  calls `SquatchMail.Migrations.up()`, safe to re-run as new versions ship.
 
-See [`FEATURES.md`](FEATURES.md) for the full feature inventory (including
-what's *not* built yet) and [`RESEARCH.md`](RESEARCH.md) /
-[`DESIGN.md`](DESIGN.md) for the architecture and visual design rationale
-behind all of this.
+Still being tracked, not yet confirmed sightings: the dashboard itself —
+activity feed, email inspector, suppression management, Base Camp settings
+UI. See the checklist below and [`FEATURES.md`](FEATURES.md) for the full
+inventory.
 
-## Installation
+## What raw SES makes you build yourself
+
+| | Raw `AWS.SESv2` calls | A hosted SES-wrapper API | SquatchMail |
+|---|---|---|---|
+| Send observability | Nothing — you get a `message_id` and silence | Usually yes, on their servers | Yes, in **your** Postgres, via Swoosh telemetry — zero code changes |
+| Bounce/complaint handling | Wire up SNS yourself, from scratch | Built in | Built in, hand-verified signatures, no proxy |
+| Suppression list | Build and enforce it yourself | Built in | Built in, with bounce-type-aware expiry, plus an optional adapter that blocks the send outright |
+| Where your data lives | Nowhere (SES doesn't keep a timeline) | Their database, their retention policy | Your database, your schema, your `retention_days` |
+| Setup | AWS console, by hand | Sign up, get an API key, integrate their SDK | `mix igniter.install squatch_mail` |
+| Extra infrastructure | None, but also none of the above | A vendor dependency | None — it's a library, not a service |
+
+## TRACKING METHODOLOGY
+
+How a Sighting actually gets tracked, in two halves — outbound and inbound:
+
+```
+ OUTBOUND (a send happens)
+ ──────────────────────────
+
+   Your app                SquatchMail                 Your database
+ ┌────────────┐   deliver ┌───────────────┐   record  ┌─────────────────┐
+ │ Swoosh      │ ───────▶ │ :telemetry    │ ────────▶ │ squatch_mail.*   │
+ │ Mailer      │  (:stop) │ span capture  │  (async,  │ (emails,         │
+ │ .deliver/2  │          │ (Capture)     │   never   │  recipients,     │
+ └────────────┘          └───────────────┘   blocks)  │  attachments)    │
+                                                        └─────────────────┘
+       no adapter swap · no proxy · your existing SES call, observed
+
+
+ INBOUND (SES reports back what happened to it)
+ ───────────────────────────────────────────────
+
+ ┌─────┐   event   ┌─────┐  HTTPS POST  ┌──────────────────┐   verified,   ┌─────────────────┐
+ │ SES │ ────────▶ │ SNS │ ───────────▶ │ webhook endpoint  │ ───────────▶ │ squatch_mail.*   │
+ └─────┘           └─────┘  (signed)    │ (token + SigV1/2  │  normalized   │ (email_events =  │
+                                         │  signature check) │   event      │  "Footprints",   │
+                                         └──────────────────┘               │  suppressions)   │
+                                                                             └─────────────────┘
+       delivery → delivered · open → opened · click → clicked
+       bounce → bounced (+ suppression) · complaint → complained (+ suppression)
+```
+
+Both halves land in the same `squatch_mail` Postgres schema, which the
+dashboard (in progress — see the checklist) reads from directly. No queue,
+no separate service, no polling.
+
+## SETTING UP BASE CAMP
 
 ### With igniter (recommended)
 
@@ -130,7 +201,10 @@ If you'd rather not use igniter, or want full control over each step:
    `:repo` is required — it's the `Ecto.Repo` SquatchMail uses to read and
    write its own tables, which live in their own `squatch_mail` Postgres
    schema so they never collide with your application's tables. See
-   `SquatchMail.Config` for all supported options.
+   `SquatchMail.Config` for all supported options, including the telemetry
+   capture engine's `:capture` options (HTML/text body retention, sample
+   rate), the guardrails' `:guard` options (complaint-rate threshold,
+   auto-pause), and `:pruner` (retention sweep interval).
 
 3. **Generate and run the migration**. Create a new migration in your host
    app (`mix ecto.gen.migration add_squatch_mail`) with:
@@ -164,21 +238,29 @@ If you'd rather not use igniter, or want full control over each step:
    end
    ```
 
-   Visit `/squatch` to see the dashboard. No other code changes are
-   required — SquatchMail observes mail sent through Swoosh automatically
-   via telemetry.
+   Visit `/squatch` to see the dashboard once it ships (see the checklist
+   below for current status). No other code changes are required —
+   SquatchMail observes mail sent through Swoosh automatically via
+   telemetry, and this step is safe to add now even before the dashboard
+   pages themselves land.
 
-   **Read the Security section below before you deploy this anywhere but
-   your own laptop.** By default, in anything that isn't a bare `mix deps.get`
-   sandbox, SquatchMail refuses to serve the dashboard until you've told it
-   who's allowed in.
+   **Read the "Keeping the Forest Safe" section below before you deploy
+   this anywhere but your own laptop.**
 
-## Security
+## KEEPING THE FOREST SAFE
 
-SquatchMail ships three layers of dashboard access control, checked in order.
-Exactly one applies to any given request to a dashboard page (Trail Log,
-Sightings, Suppressions, Base Camp). The inbound SNS webhook route is never
-covered by any of them — it authenticates itself independently.
+> **DRAFT — not yet verified against committed code.** The router macro and
+> auth plug this section describes (`SquatchMail.Web.Router`,
+> `SquatchMail.Web.Plugs.Auth`) are implemented but not yet merged to `main`
+> as of this writing. The behavior below is the intended, designed model —
+> confirm it against the actual module docs before treating it as final, and
+> ping the team before publishing this section as non-draft.
+
+SquatchMail is designed to ship three layers of dashboard access control,
+checked in order. Exactly one would apply to any given request to a
+dashboard page (Trail Log, Sightings, Suppressions, Base Camp). The inbound
+SNS webhook route is never covered by any of them — it authenticates itself
+independently (see below).
 
 **a) Host-owned authentication (recommended).** Mount
 `squatch_mail_dashboard` inside your own authenticated pipeline and pass your
@@ -191,41 +273,39 @@ scope "/" do
 end
 ```
 
-This is the only layer that can express real authorization — roles,
-per-user scoping, SSO. Layers (b) and (c) are a safety net for hosts that
-mount the dashboard without wiring up their own auth, not a substitute for
-doing so.
+This would be the only layer that can express real authorization — roles,
+per-user scoping, SSO. Layers (b) and (c) are meant as a safety net for hosts
+that mount the dashboard without wiring up their own auth, not a substitute
+for doing so.
 
-**b) Built-in fallback: HTTP Basic Auth.** If you configure
+**b) Built-in fallback: HTTP Basic Auth.** The design calls for a
+configuration like
 
 ```elixir
 config :squatch_mail,
   basic_auth: [username: "squatch", password: System.fetch_env!("SQUATCH_MAIL_PASSWORD")]
 ```
 
-every dashboard route is protected by `Plug.BasicAuth` with those
-credentials. Meant for small deployments that want *something* stronger than
-wide open without standing up a real admin pipeline.
+to protect every dashboard route with `Plug.BasicAuth` — for small
+deployments that want *something* stronger than wide open without standing
+up a real admin pipeline.
 
-**c) Safe default: refuse.** If neither (a) nor (b) applies, SquatchMail
-checks `Application.get_env(:squatch_mail, :allow_unauthenticated, false)` —
-a runtime check (not `Mix.env()`, which doesn't exist in a release, and would
-silently disable this exact safeguard in production). When it's `false`,
-dashboard routes render a plain-language refusal page instead of your data,
-explaining how to configure (a) or (b). Set it to `true` explicitly if you're
-running locally and want the dashboard open with no fuss:
+**c) Safe default: refuse.** If neither (a) nor (b) applies, the design has
+SquatchMail check a runtime flag (not `Mix.env()`, which doesn't exist in a
+release and would silently disable this exact safeguard in production) and
+render a plain-language refusal page instead of dashboard data until access
+control is configured.
 
-```elixir
-config :squatch_mail, allow_unauthenticated: true
-```
-
-**The SNS webhook.** `POST .../webhooks/sns/:token` is a machine-to-machine
-route, not a browser session, so none of the above applies to it. It's
-protected instead by a random per-source `webhook_token` in the URL path
-(defense in depth) plus SNS message signature verification performed inside
-the request handler — a payload with a forged or missing signature is
-rejected before it can touch your data, regardless of whether the token in
-the URL is correct.
+**The SNS webhook — this part is real and committed.** `SquatchMail.SNS.MessageVerifier`
+hand-verifies inbound SNS message signatures (SigV1/SigV2) against
+`:public_key`, with no third-party dependency, validating the
+`SigningCertURL` host/scheme before ever fetching it and caching parsed
+certificates in ETS for the certificate's own validity window.
+`SquatchMail.SNS.Processor` rejects a payload with a missing or invalid
+signature before it can touch your data, and every inbound payload — verified
+or not — is logged via `SquatchMail.Tracker.log_webhook/1` for audit. This
+does not depend on the dashboard auth layers above; it's independent
+token-plus-signature authentication for a machine-to-machine endpoint.
 
 **Credentials at rest.** AWS credentials for SES/SNS provisioning are either
 read from the environment (`credentials_mode: "ambient"`, the default — no
@@ -233,7 +313,8 @@ keys touch your database) or, if you opt into `credentials_mode: "static"`,
 stored as plaintext columns on the `sources` table today. Encrypting
 `access_key_id`/`secret_access_key` at rest is a known gap, tracked as a TODO
 in `SquatchMail.Source` — prefer ambient credentials (an IAM instance role,
-or environment variables injected by your platform) until that lands.
+or environment variables injected by your platform) until that lands. This
+part is accurate as of the committed `SquatchMail.Source` schema.
 
 **Found a security issue?** See [`SECURITY.md`](SECURITY.md) for how to
 report it.
@@ -243,24 +324,28 @@ report it.
 Tracking against the [LaraSend](https://larasend.com/) feature inventory
 documented in [`FEATURES.md`](FEATURES.md). **P1** = this embeddable library;
 **P2** = a future standalone app; **—** = intentionally out of scope for P1.
+Status here reflects what's actually committed to `main`, not what's in an
+open pull request or a teammate's working tree.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Zero-config Swoosh telemetry capture | ✅ Shipped | `SquatchMail.Capture` — LaraSend has no equivalent |
-| Versioned migrations (Oban/ErrorTracker pattern) | ✅ Shipped | `SquatchMail.Migrations`, schema-comment version tracking |
-| Core schema (emails, recipients, attachments, events, suppressions, webhook logs, source) | ✅ Shipped | `SquatchMail.Tracker` context |
-| SES event ingestion (SNS webhook, signature verification, event normalizer) | 🚧 In progress | hand-rolled signature verification, no `ex_aws` |
-| Suppression list (hard bounce/complaint permanent, soft bounce expiring) | ✅ Shipped | enforced in `SquatchMail.Tracker` |
-| One-click SES provisioning (config set + SNS topic + subscription) | ✅ Shipped | `SquatchMail.SES.provision/2` — LaraSend requires manual console setup |
-| SES quota sync (6h cache) | ✅ Shipped | `SquatchMail.SES.sync_quota/1` |
-| Identity list + DKIM/verification status + DNS record guidance | ✅ Shipped | `SquatchMail.SES.list_identities/1`, `dns_records_for/1` |
-| Live DNS re-check | 🗓 Planned | currently re-queries SES's own verification status; live `:inet_res` lookups are a follow-up |
-| Dashboard foundation (router macro, auth, layout, self-contained assets) | 🚧 In progress | `SquatchMail.Web.Router`, three-layer auth model above |
-| Activity feed + email inspector + stats | 🗓 Planned | Trail Log, Sighting inspector |
-| Suppressions / bounces / complaints / settings pages | 🗓 Planned | Do-Not-Disturb registry, Base Camp |
-| Retention pruning (Oban job honoring `retention_days`) | 🚧 In progress | `SquatchMail.Tracker.prune/0` exists; scheduled worker pending |
-| Igniter installer + manual install path | ✅ Shipped | `mix igniter.install squatch_mail` |
-| Credential encryption at rest (static mode) | 🗓 Planned | see Security section |
+| Zero-config Swoosh telemetry capture | Shipped | `SquatchMail.Capture` — LaraSend has no equivalent |
+| Versioned migrations (Oban/ErrorTracker pattern) | Shipped | `SquatchMail.Migrations`, schema-comment version tracking |
+| Core schema (emails, recipients, attachments, events, suppressions, webhook logs, source) | Shipped | `SquatchMail.Tracker` context |
+| SES event ingestion (SNS webhook, signature verification, event normalizer) | Shipped | `SquatchMail.SNS.MessageVerifier`/`Processor`, hand-rolled signatures, no `ex_aws` |
+| Suppression list (hard bounce/complaint permanent, soft bounce expiring) | Shipped | enforced in `SquatchMail.Tracker` and the SNS processor |
+| One-click SES provisioning (config set + SNS topic + subscription) | Shipped | `SquatchMail.SES.provision/2` — LaraSend requires manual console setup |
+| SES quota sync (6h cache) | Shipped | `SquatchMail.SES.sync_quota/1` |
+| Identity list + DKIM/verification status + DNS record guidance | Shipped | `SquatchMail.SES.list_identities/1`, `dns_records_for/1` |
+| Live DNS re-check | Planned | currently re-queries SES's own verification status; live `:inet_res` lookups are a follow-up |
+| Dashboard foundation (router macro, auth, layout, self-contained assets) | In progress | designed, not yet merged to `main` — see the DRAFT note above |
+| Activity feed + email inspector + stats | Planned | Trail Log, Sighting inspector |
+| Suppressions / bounces / complaints / settings pages | Planned | Do-Not-Disturb registry, Base Camp |
+| Complaint-rate auto-pause circuit breaker | Shipped | `SquatchMail.Guard.check/1`, min-volume floor, 0.1% default threshold |
+| Send-path enforcement (optional) | Shipped | `SquatchMail.Adapters.Watchtower` — opt-in Swoosh adapter, blocks rather than only observes |
+| Retention pruning | Shipped | `SquatchMail.Pruner` runs `Tracker.prune/0` on a timer; also prunes `webhook_logs` on a fixed 30-day window |
+| Igniter installer + manual install path | Shipped | `mix igniter.install squatch_mail` |
+| Credential encryption at rest (static mode) | Planned | see "Keeping the Forest Safe" |
 | Templates, workspaces, API keys, outbound webhooks, multi-project | — | P2 (standalone app) scope, not P1 |
 
 ## Requirements
@@ -273,14 +358,24 @@ Module docs are on [HexDocs](https://hexdocs.pm/squatch_mail) once published;
 until then, `mix docs` builds them locally. Start with `SquatchMail.Config`
 for configuration, `SquatchMail.Tracker` for the read/write API the dashboard
 and webhook layers are built on, `SquatchMail.Migrations` for the migration
-contract, and `SquatchMail.Web.Router` for mounting and the security model.
+contract, and `SquatchMail.SES` for the "Connect SES" provisioning flow.
 
 See also [`RESEARCH.md`](RESEARCH.md) (architecture and ecosystem survey),
 [`FEATURES.md`](FEATURES.md) (feature inventory vs. LaraSend), and
-[`DESIGN.md`](DESIGN.md) (the dashboard's visual design spec) for everything
-that doesn't belong in module docs. [`CHANGELOG.md`](CHANGELOG.md) tracks
-what's shipped release over release.
+[`DESIGN.md`](DESIGN.md) (the dashboard's visual design spec and the full
+Sighting/Footprint/Base Camp glossary) for everything that doesn't belong in
+module docs. [`CHANGELOG.md`](CHANGELOG.md) tracks what's shipped release
+over release.
+
+## JOIN THE EXPEDITION
+
+Issues and pull requests are welcome — this is early, pre-1.0 work, and the
+dashboard itself (the part you'd actually click around in) is still being
+built. Read `CLAUDE.md` for the naming conventions this codebase holds
+itself to (boring code, bigfoot-flavored UI copy only) before sending a
+patch, and see [`SECURITY.md`](SECURITY.md) if what you found is a
+vulnerability rather than a bug.
 
 ## License
 
-MIT
+MIT — see [`LICENSE`](LICENSE).
