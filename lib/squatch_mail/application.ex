@@ -11,16 +11,16 @@ defmodule SquatchMail.Application do
       {Finch, name: SquatchMail.Finch},
 
       # Persists captured emails off the caller's process (see
-      # SquatchMail.TelemetryCapture's moduledoc for why this must never
-      # block or raise in the process that called Mailer.deliver/2).
-      {Task.Supervisor, name: SquatchMail.TaskSupervisor}
+      # SquatchMail.Capture's moduledoc for why this must never block or
+      # raise in the process that called Mailer.deliver/2).
+      SquatchMail.Capture.Recorder
 
       # TODO: start the retention/pruning worker here once suppression +
       # retention policies land.
     ]
 
     with {:ok, pid} <- Supervisor.start_link(children, strategy: :one_for_one, name: __MODULE__) do
-      :ok = SquatchMail.TelemetryCapture.attach()
+      :ok = SquatchMail.Capture.attach()
       {:ok, pid}
     end
   end
