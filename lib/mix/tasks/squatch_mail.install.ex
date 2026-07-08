@@ -294,10 +294,19 @@ if Code.ensure_loaded?(Igniter) do
         @path_segments #{inspect(path_segments)}
 
         def read_body(conn, opts) do
-          if match?(^@path_segments ++ ["webhooks", "sns", _token], conn.path_info) do
+          if webhook_path?(conn.path_info) do
             SquatchMail.SNS.RawBodyReader.read_body(conn, opts)
           else
             Plug.Conn.read_body(conn, opts)
+          end
+        end
+
+        defp webhook_path?(path_info) do
+          prefix = @path_segments
+
+          case Enum.split(path_info, length(prefix)) do
+            {^prefix, ["webhooks", "sns", _token]} -> true
+            _ -> false
           end
         end
         """)
@@ -373,10 +382,19 @@ if Code.ensure_loaded?(Igniter) do
             @path_segments #{inspect(path_segments)}
 
             def read_body(conn, opts) do
-              if match?(^@path_segments ++ ["webhooks", "sns", _token], conn.path_info) do
+              if webhook_path?(conn.path_info) do
                 SquatchMail.SNS.RawBodyReader.read_body(conn, opts)
               else
                 Plug.Conn.read_body(conn, opts)
+              end
+            end
+
+            defp webhook_path?(path_info) do
+              prefix = @path_segments
+
+              case Enum.split(path_info, length(prefix)) do
+                {^prefix, ["webhooks", "sns", _token]} -> true
+                _ -> false
               end
             end
           end

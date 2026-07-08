@@ -261,10 +261,19 @@ If you'd rather not use igniter, or want full control over each step:
      @path_segments ["squatch"]
 
      def read_body(conn, opts) do
-       if match?(^@path_segments ++ ["webhooks", "sns", _token], conn.path_info) do
+       if webhook_path?(conn.path_info) do
          SquatchMail.SNS.RawBodyReader.read_body(conn, opts)
        else
          Plug.Conn.read_body(conn, opts)
+       end
+     end
+
+     defp webhook_path?(path_info) do
+       prefix = @path_segments
+
+       case Enum.split(path_info, length(prefix)) do
+         {^prefix, ["webhooks", "sns", _token]} -> true
+         _ -> false
        end
      end
    end
@@ -294,18 +303,11 @@ If you'd rather not use igniter, or want full control over each step:
 
 ## KEEPING THE FOREST SAFE
 
-> **DRAFT — not yet verified against committed code.** The router macro and
-> auth plug this section describes (`SquatchMail.Web.Router`,
-> `SquatchMail.Web.Plugs.Auth`) are implemented but not yet merged to `main`
-> as of this writing. The behavior below is the intended, designed model —
-> confirm it against the actual module docs before treating it as final, and
-> ping the team before publishing this section as non-draft.
-
-SquatchMail is designed to ship three layers of dashboard access control,
-checked in order. Exactly one would apply to any given request to a
-dashboard page (Trail Log, Sightings, Suppressions, Base Camp). The inbound
-SNS webhook route is never covered by any of them — it authenticates itself
-independently (see below).
+SquatchMail ships three layers of dashboard access control, checked in
+order (`SquatchMail.Web.Router` + `SquatchMail.Web.Plugs.Auth`). Exactly
+one applies to any given request to a dashboard page (Trail Log, Sightings,
+Suppressions, Base Camp). The inbound SNS webhook route is never covered by
+any of them — it authenticates itself independently (see below).
 
 **a) Host-owned authentication (recommended).** Mount
 `squatch_mail_dashboard` inside your own authenticated pipeline and pass your
@@ -318,7 +320,7 @@ scope "/" do
 end
 ```
 
-This would be the only layer that can express real authorization — roles,
+This is the only layer that can express real authorization — roles,
 per-user scoping, SSO. Layers (b) and (c) are meant as a safety net for hosts
 that mount the dashboard without wiring up their own auth, not a substitute
 for doing so.
@@ -383,7 +385,7 @@ open pull request or a teammate's working tree.
 | SES quota sync (6h cache) | Shipped | `SquatchMail.SES.sync_quota/1` |
 | Identity list + DKIM/verification status + DNS record guidance | Shipped | `SquatchMail.SES.list_identities/1`, `dns_records_for/1` |
 | Live DNS re-check | Planned | currently re-queries SES's own verification status; live `:inet_res` lookups are a follow-up |
-| Dashboard foundation (router macro, auth, layout, self-contained assets) | In progress | designed, not yet merged to `main` — see the DRAFT note above |
+| Dashboard foundation (router macro, auth, layout, self-contained assets) | Shipped | `SquatchMail.Web.Router` — one macro, embedded assets, three auth layers |
 | Activity feed + email inspector + stats | Planned | Trail Log, Sighting inspector |
 | Suppressions / bounces / complaints / settings pages | Planned | Do-Not-Disturb registry, Base Camp |
 | Complaint-rate auto-pause circuit breaker | Shipped | `SquatchMail.Guard.check/1`, min-volume floor, 0.1% default threshold |
