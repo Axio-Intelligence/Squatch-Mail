@@ -5,11 +5,11 @@ defmodule SquatchMail.Adapters.Watchtower do
 
   This is the LaraSend-parity "proxy mode" from RESEARCH.md, applied to
   guardrails specifically: instead of only *observing* sends via telemetry
-  (see `SquatchMail.TelemetryCapture`), Watchtower sits directly in the send path so
+  (see `SquatchMail.Capture`), Watchtower sits directly in the send path so
   a suppressed recipient or an auto-paused account can actually **block**
   the send rather than just be recorded after the fact.
 
-  This is entirely optional — most hosts should prefer `SquatchMail.TelemetryCapture`
+  This is entirely optional — most hosts should prefer `SquatchMail.Capture`
   (pure observation, zero risk of ever blocking a legitimate send by
   mistake) and only reach for Watchtower if they want suppressions and the
   complaint-rate auto-pause enforced *before* SES ever sees the request,
@@ -52,8 +52,8 @@ defmodule SquatchMail.Adapters.Watchtower do
   A blocked send still returns `{:error, reason}` from `deliver/2`, which
   means `Swoosh.Mailer` still emits its `[:swoosh, :deliver, :stop]`
   telemetry (with that error in metadata) exactly as it would for any other
-  adapter failure — so `SquatchMail.TelemetryCapture` still records the attempt. See
-  `SquatchMail.TelemetryCapture` for how `{:suppressed, _}` is recorded with status
+  adapter failure — so `SquatchMail.Capture` still records the attempt. See
+  `SquatchMail.Capture` for how `{:suppressed, _}` is recorded with status
   `"suppressed"` rather than `"failed"`.
   """
 

@@ -11,9 +11,9 @@ defmodule SquatchMail.Application do
       {Finch, name: SquatchMail.Finch},
 
       # Persists captured emails off the caller's process (see
-      # SquatchMail.TelemetryCapture's moduledoc for why this must never
-      # block or raise in the process that called Mailer.deliver/2).
-      SquatchMail.TelemetryCapture.Recorder,
+      # SquatchMail.Capture's moduledoc for why this must never block or
+      # raise in the process that called Mailer.deliver/2).
+      SquatchMail.Capture.Recorder,
 
       # Periodically prunes emails/events/webhook_logs per retention_days
       # (see SquatchMail.Pruner's moduledoc). Runs on a timer regardless of
@@ -23,7 +23,7 @@ defmodule SquatchMail.Application do
     ]
 
     with {:ok, pid} <- Supervisor.start_link(children, strategy: :one_for_one, name: __MODULE__) do
-      :ok = SquatchMail.TelemetryCapture.attach()
+      :ok = SquatchMail.Capture.attach()
       {:ok, pid}
     end
   end

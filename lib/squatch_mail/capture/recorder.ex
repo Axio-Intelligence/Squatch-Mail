@@ -1,8 +1,8 @@
-defmodule SquatchMail.TelemetryCapture.Recorder do
+defmodule SquatchMail.Capture.Recorder do
   @moduledoc """
   Persists captured emails off the process that sent them.
 
-  `SquatchMail.TelemetryCapture`'s telemetry handler runs synchronously in the
+  `SquatchMail.Capture`'s telemetry handler runs synchronously in the
   caller's process — the same process that just called
   `Mailer.deliver/2` — so it must return immediately. It hands each captured
   email's attrs to this GenServer with `GenServer.cast/2` (never `call/2`,
@@ -153,7 +153,7 @@ defmodule SquatchMail.TelemetryCapture.Recorder do
 
     if state.last_logged_at == nil or now - state.last_logged_at >= @log_throttle_ms do
       Logger.warning(
-        "SquatchMail.TelemetryCapture dropped #{dropped + 1} email(s) because its queue exceeded " <>
+        "SquatchMail.Capture dropped #{dropped + 1} email(s) because its queue exceeded " <>
           "max_queue (#{Config.max_queue()}). Increase :max_queue or investigate why " <>
           "persistence is falling behind."
       )

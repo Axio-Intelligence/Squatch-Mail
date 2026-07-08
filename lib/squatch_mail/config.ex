@@ -9,21 +9,19 @@ defmodule SquatchMail.Config do
         otp_app: :my_app,
         prefix: "squatch_mail",
         enabled: true,
-        store_html: true,
-        store_text: true,
-        sample_rate: 1.0,
-        max_queue: 10_000,
-        max_concurrency: 50,
+        capture: [
+          store_html: true,
+          store_text: true,
+          sample_rate: 1.0,
+          max_queue: 10_000,
+          max_concurrency: 50
+        ],
         guard: [
           complaint_rate_pause: true,
           complaint_rate_threshold: 0.001,
           complaint_rate_window_days: 30,
           min_volume: 100,
           prune_interval_ms: :timer.hours(24)
-        ],
-        pruner: [
-          interval: :timer.hours(6),
-          enabled: true
         ]
 
   ## Options
@@ -39,28 +37,29 @@ defmodule SquatchMail.Config do
     * `:enabled` - whether SquatchMail's capture/ingestion machinery is
       active. Defaults to `true`. Useful for disabling SquatchMail in
       specific environments (e.g. test) without removing its configuration.
-    * `:store_html` - whether the telemetry capture engine
-      (`SquatchMail.TelemetryCapture`) persists the HTML body. Defaults to
-      `true`. Set to `false` to keep engagement/status data while dropping
-      potentially sensitive HTML content.
-    * `:store_text` - whether the capture engine persists the plain-text
-      body. Defaults to `true`, same rationale as `:store_html`.
-    * `:sample_rate` - the fraction (`0.0`..`1.0`) of outgoing emails the
-      capture engine persists. Defaults to `1.0` (capture every send).
-      Lower this for very high-volume mailers where full capture would be
-      too much write load; `1.0` and `0.0` are treated as exact (no random
-      sampling overhead at the extremes).
-    * `:max_queue` - the maximum number of captured emails
-      `SquatchMail.TelemetryCapture.Recorder` will hold pending persistence
-      before it starts dropping new captures (and emitting
-      `[:squatch_mail, :capture, :dropped]`) rather than let the queue grow
-      unbounded under a burst. Defaults to `10_000`.
-    * `:max_concurrency` - the maximum number of captures being persisted to
-      the database *at once*. Distinct from `:max_queue`: `:max_queue`
-      bounds how many captures can be *waiting*, while `:max_concurrency`
-      bounds how many of those waiting captures are simultaneously checking
-      out a connection from the host's `Repo` pool, so a burst can't itself
-      exhaust that pool. Defaults to `50`.
+    * `:capture` - options for the telemetry capture engine
+      (`SquatchMail.Capture`), a keyword list:
+        * `:store_html` - whether to persist the HTML body. Defaults to
+          `true`. Set to `false` to keep engagement/status data while
+          dropping potentially sensitive HTML content.
+        * `:store_text` - whether to persist the plain-text body. Defaults
+          to `true`, same rationale as `:store_html`.
+        * `:sample_rate` - the fraction (`0.0`..`1.0`) of outgoing emails the
+          capture engine persists. Defaults to `1.0` (capture every send).
+          Lower this for very high-volume mailers where full capture would
+          be too much write load; `1.0` and `0.0` are treated as exact (no
+          random sampling overhead at the extremes).
+        * `:max_queue` - the maximum number of captured emails the
+          `SquatchMail.Capture.Recorder` will hold pending persistence before
+          it starts dropping new captures (and emitting
+          `[:squatch_mail, :capture, :dropped]`) rather than let the queue
+          grow unbounded under a burst. Defaults to `10_000`.
+        * `:max_concurrency` - the maximum number of captures being
+          persisted to the database *at once*. Distinct from `:max_queue`:
+          `:max_queue` bounds how many captures can be *waiting*, while
+          `:max_concurrency` bounds how many of those waiting captures are
+          simultaneously checking out a connection from the host's `Repo`
+          pool, so a burst can't itself exhaust that pool. Defaults to `50`.
     * `:guard` - options for `SquatchMail.Guard`, a keyword list:
         * `:complaint_rate_pause` - whether the complaint-rate circuit
           breaker is active at all. Defaults to `true`; set to `false` to
@@ -131,13 +130,32 @@ defmodule SquatchMail.Config do
     !!Application.get_env(:squatch_mail, :enabled, true)
   end
 
+  @default_capture [
+    store_html: true,
+    store_text: true,
+    sample_rate: 1.0,
+    max_queue: 10_000,
+    max_concurrency: 50
+  ]
+
+  @doc """
+  Returns a single capture option, falling back to its default when the host
+  hasn't configured `:capture` at all, or has configured it but omitted this
+  particular key.
+  """
+  @spec capture(atom()) :: term()
+  def capture(key) when is_atom(key) do
+    configured = Application.get_env(:squatch_mail, :capture, [])
+    Keyword.get(configured, key, Keyword.fetch!(@default_capture, key))
+  end
+
   @doc """
   Returns whether the HTML body should be persisted for captured emails.
 
   Defaults to `true`.
   """
   @spec store_html?() :: boolean()
-  def store_html?, do: !!Application.get_env(:squatch_mail, :store_html, true)
+  def store_html?, do: !!capture(:store_html)
 
   @doc """
   Returns whether the plain-text body should be persisted for captured
@@ -146,7 +164,7 @@ defmodule SquatchMail.Config do
   Defaults to `true`.
   """
   @spec store_text?() :: boolean()
-  def store_text?, do: !!Application.get_env(:squatch_mail, :store_text, true)
+  def store_text?, do: !!capture(:store_text)
 
   @doc """
   Returns the configured sample rate for the telemetry capture engine.
@@ -154,27 +172,25 @@ defmodule SquatchMail.Config do
   Defaults to `1.0`.
   """
   @spec sample_rate() :: float()
-  def sample_rate, do: Application.get_env(:squatch_mail, :sample_rate, 1.0) * 1.0
+  def sample_rate, do: capture(:sample_rate) * 1.0
 
   @doc """
   Returns the maximum number of pending captures
-  `SquatchMail.TelemetryCapture.Recorder` will queue before dropping new
-  ones.
+  `SquatchMail.Capture.Recorder` will queue before dropping new ones.
 
   Defaults to `10_000`.
   """
   @spec max_queue() :: non_neg_integer()
-  def max_queue, do: Application.get_env(:squatch_mail, :max_queue, 10_000)
+  def max_queue, do: capture(:max_queue)
 
   @doc """
-  Returns the maximum number of captures
-  `SquatchMail.TelemetryCapture.Recorder` will persist to the database
-  concurrently.
+  Returns the maximum number of captures `SquatchMail.Capture.Recorder`
+  will persist to the database concurrently.
 
   Defaults to `50`.
   """
   @spec max_concurrency() :: pos_integer()
-  def max_concurrency, do: Application.get_env(:squatch_mail, :max_concurrency, 50)
+  def max_concurrency, do: capture(:max_concurrency)
 
   @default_guard [
     complaint_rate_pause: true,

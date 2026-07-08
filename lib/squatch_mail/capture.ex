@@ -1,4 +1,4 @@
-defmodule SquatchMail.TelemetryCapture do
+defmodule SquatchMail.Capture do
   @moduledoc """
   Observes every `Swoosh.Mailer.deliver/2` and `deliver_many/2` call in the
   host application via `:telemetry`, with zero changes to the host's mailer
@@ -8,7 +8,7 @@ defmodule SquatchMail.TelemetryCapture do
   `[:swoosh, :deliver | :deliver_many, :start | :stop | :exception]`. This
   module attaches to `:stop` and `:exception` only — never `:start`, since
   there's nothing to persist until a send has actually finished — and
-  records the outcome through `SquatchMail.TelemetryCapture.Recorder`.
+  records the outcome through `SquatchMail.Capture.Recorder`.
 
   ## Design constraints
 
@@ -19,7 +19,7 @@ defmodule SquatchMail.TelemetryCapture do
       propagated, so a SquatchMail bug can never break the host's mail
       sending;
     * never blocks the caller: the handler only builds attrs and hands them
-      to `SquatchMail.TelemetryCapture.Recorder.record/1` (a `GenServer.cast/2`),
+      to `SquatchMail.Capture.Recorder.record/1` (a `GenServer.cast/2`),
       returning immediately regardless of how long the actual database write
       takes, or whether the queue is full and the attrs get dropped.
 
@@ -109,7 +109,7 @@ defmodule SquatchMail.TelemetryCapture do
   rescue
     error ->
       Logger.warning(
-        "SquatchMail.TelemetryCapture failed handling a telemetry event: " <>
+        "SquatchMail.Capture failed handling a telemetry event: " <>
           Exception.format(:error, error, __STACKTRACE__)
       )
   end
@@ -154,13 +154,13 @@ defmodule SquatchMail.TelemetryCapture do
 
     email
     |> email_attrs(mailer, result, error)
-    |> SquatchMail.TelemetryCapture.Recorder.record()
+    |> SquatchMail.Capture.Recorder.record()
   end
 
   defp capture_single_exception(%{email: email, mailer: mailer, reason: reason}) do
     email
     |> email_attrs(mailer, nil, reason)
-    |> SquatchMail.TelemetryCapture.Recorder.record()
+    |> SquatchMail.Capture.Recorder.record()
   end
 
   defp capture_many(%{emails: emails, mailer: mailer} = metadata) do
@@ -172,7 +172,7 @@ defmodule SquatchMail.TelemetryCapture do
     |> Enum.each(fn {email, index} ->
       email
       |> email_attrs(mailer, result_for_index(result, index), error)
-      |> SquatchMail.TelemetryCapture.Recorder.record()
+      |> SquatchMail.Capture.Recorder.record()
     end)
   end
 
@@ -180,7 +180,7 @@ defmodule SquatchMail.TelemetryCapture do
     Enum.each(emails, fn email ->
       email
       |> email_attrs(mailer, nil, reason)
-      |> SquatchMail.TelemetryCapture.Recorder.record()
+      |> SquatchMail.Capture.Recorder.record()
     end)
   end
 
