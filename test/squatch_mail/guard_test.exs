@@ -1,7 +1,7 @@
 defmodule SquatchMail.GuardTest do
   use SquatchMail.DataCase, async: false
 
-  alias SquatchMail.{Guard, Tracker}
+  alias SquatchMail.{Email, Guard, Suppression, Tracker}
 
   defp sent_email(attrs) do
     {status, attrs} = Map.pop(attrs, :status, "sent")
@@ -28,10 +28,16 @@ defmodule SquatchMail.GuardTest do
     # test computes an aggregate over *all* rows in the emails table, so
     # without an explicit wipe between tests, an earlier test's fixture rows
     # (e.g. "999 sent + 1 complained") would silently pollute a later test's
-    # ratio. Truncate before each test instead of relying on transactional
-    # isolation.
-    SquatchMail.Test.Repo.query!("TRUNCATE TABLE squatch_mail.emails CASCADE")
-    SquatchMail.Test.Repo.query!("TRUNCATE TABLE squatch_mail.suppressions CASCADE")
+    # ratio. Delete before each test instead of relying on transactional
+    # isolation. Deliberately `DELETE FROM`, not `TRUNCATE`: other `async:
+    # false` test modules (e.g. WatchtowerTest) run concurrently with this
+    # one under ExUnit's scheduler, and TRUNCATE's AccessExclusiveLock
+    # deadlocks against their concurrent reads — a real deadlock this
+    # produced in practice. DELETE's row-level locking doesn't have that
+    # problem, at the cost of not resetting the primary key sequence (which
+    # nothing here depends on).
+    SquatchMail.Test.Repo.delete_all(Email)
+    SquatchMail.Test.Repo.delete_all(Suppression)
 
     # A raised complaint-rate threshold and no minimum volume by default so
     # a handful of test sends can trip the breaker without needing 100+
