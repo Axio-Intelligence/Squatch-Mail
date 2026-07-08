@@ -32,20 +32,28 @@ defmodule SquatchMail.SESTest do
         secret_access_key: "shhh"
       }
 
-      client = SES.client(source)
-
+      assert {:ok, client} = SES.client(source)
       assert client.access_key_id == "AKIASTATIC"
       assert client.secret_access_key == "shhh"
       assert client.region == "eu-west-1"
       assert client.http_client == {AWS.HTTPClient.Finch, finch_name: SquatchMail.Finch}
     end
 
-    test "raises for static mode with missing keys" do
+    test "returns {:error, :missing_credentials} for static mode with missing keys, without raising" do
       source = %Source{credentials_mode: "static", region: "us-east-1"}
 
-      assert_raise RuntimeError, ~r/missing an access_key_id/, fn ->
-        SES.client(source)
-      end
+      assert SES.client(source) == {:error, :missing_credentials}
+    end
+
+    test "returns {:error, :missing_credentials} for static mode with a blank (whitespace) secret" do
+      source = %Source{
+        credentials_mode: "static",
+        region: "us-east-1",
+        access_key_id: "AKIASTATIC",
+        secret_access_key: "   "
+      }
+
+      assert SES.client(source) == {:error, :missing_credentials}
     end
 
     test "builds an ambient client from env vars" do
@@ -58,7 +66,7 @@ defmodule SquatchMail.SESTest do
           "AWS_SESSION_TOKEN" => "token123"
         },
         fn ->
-          client = SES.client(source)
+          assert {:ok, client} = SES.client(source)
           assert client.access_key_id == "AKIAENV"
           assert client.secret_access_key == "envsecret"
           assert client.session_token == "token123"
@@ -68,13 +76,70 @@ defmodule SquatchMail.SESTest do
       )
     end
 
-    test "raises for ambient mode with no env credentials" do
+    test "returns {:error, :missing_credentials} for ambient mode with no env credentials, without raising" do
       source = %Source{credentials_mode: "ambient", region: "us-east-1"}
 
       with_env(%{"AWS_ACCESS_KEY_ID" => nil, "AWS_SECRET_ACCESS_KEY" => nil}, fn ->
-        assert_raise RuntimeError, ~r/ambient.*credentials mode/s, fn ->
-          SES.client(source)
-        end
+        assert SES.client(source) == {:error, :missing_credentials}
+      end)
+    end
+  end
+
+  ## ---- unconfigured-source path (no raise, error propagates) ----------------
+
+  describe "public functions against an unconfigured (credential-less) source" do
+    setup do
+      # Ambient mode (the Source default) with no AWS env vars present is
+      # exactly the state of a freshly-installed host that hasn't visited
+      # Base Camp yet — this must never crash a LiveView mount/handle_event.
+      {:ok, _source} =
+        Tracker.update_source(%{credentials_mode: "ambient", region: "us-east-1"})
+
+      :ok
+    end
+
+    test "client/0 returns {:error, :missing_credentials}" do
+      with_env(%{"AWS_ACCESS_KEY_ID" => nil, "AWS_SECRET_ACCESS_KEY" => nil}, fn ->
+        assert SES.client() == {:error, :missing_credentials}
+      end)
+    end
+
+    test "sync_quota/0 propagates {:error, :missing_credentials} instead of raising" do
+      with_env(%{"AWS_ACCESS_KEY_ID" => nil, "AWS_SECRET_ACCESS_KEY" => nil}, fn ->
+        assert SES.sync_quota() == {:error, :missing_credentials}
+      end)
+    end
+
+    test "ensure_quota_synced/1 propagates {:error, :missing_credentials} when stale" do
+      source = Tracker.get_or_create_source()
+
+      with_env(%{"AWS_ACCESS_KEY_ID" => nil, "AWS_SECRET_ACCESS_KEY" => nil}, fn ->
+        assert SES.ensure_quota_synced(source) == {:error, :missing_credentials}
+      end)
+    end
+
+    test "list_identities/0 propagates {:error, :missing_credentials} instead of raising" do
+      with_env(%{"AWS_ACCESS_KEY_ID" => nil, "AWS_SECRET_ACCESS_KEY" => nil}, fn ->
+        assert SES.list_identities() == {:error, :missing_credentials}
+      end)
+    end
+
+    test "create_identity/1 propagates {:error, :missing_credentials} instead of raising" do
+      with_env(%{"AWS_ACCESS_KEY_ID" => nil, "AWS_SECRET_ACCESS_KEY" => nil}, fn ->
+        assert SES.create_identity("example.com") == {:error, :missing_credentials}
+      end)
+    end
+
+    test "recheck_identity/1 propagates {:error, :missing_credentials} instead of raising" do
+      with_env(%{"AWS_ACCESS_KEY_ID" => nil, "AWS_SECRET_ACCESS_KEY" => nil}, fn ->
+        assert SES.recheck_identity("example.com") == {:error, :missing_credentials}
+      end)
+    end
+
+    test "provision/1 propagates {:error, :missing_credentials} instead of raising" do
+      with_env(%{"AWS_ACCESS_KEY_ID" => nil, "AWS_SECRET_ACCESS_KEY" => nil}, fn ->
+        assert SES.provision("https://example.com/webhooks/sns/tok") ==
+                 {:error, :missing_credentials}
       end)
     end
   end
@@ -212,6 +277,145 @@ defmodule SquatchMail.SESTest do
                SES.provision(source, "https://mail.example.com/webhooks/ses/t", client)
 
       assert message =~ "timed out"
+    end
+  end
+
+  ## ---- structured AWS error matching (already_exists?/not_found?) -----------
+
+  describe "structured AWS error matching" do
+    test "SNS XML NotFound code is treated as not-found even with an unrelated Message body",
+         %{stub: stub, client: client} do
+      stale_arn = "arn:aws:sns:us-east-1:123456789012:gone"
+      new_arn = "arn:aws:sns:us-east-1:123456789012:squatch_mail-events"
+      {:ok, source} = Tracker.update_source(%{sns_topic_arn: stale_arn})
+
+      stub_create_configuration_set(stub)
+
+      AWSStub.stub(stub, :post, @sns_path, fn req ->
+        cond do
+          req.body =~ "Action=GetTopicAttributes" ->
+            {:ok, 404,
+             """
+             <ErrorResponse><Error><Code>NotFound</Code>
+             <Message>Topic does not exist</Message></Error></ErrorResponse>
+             """}
+
+          true ->
+            :pass
+        end
+      end)
+
+      stub_create_topic(stub, new_arn)
+      stub_subscribe(stub, "#{new_arn}:sub-1")
+
+      assert {:ok, updated} =
+               SES.provision(source, "https://mail.example.com/webhooks/ses/tok", client)
+
+      assert updated.sns_topic_arn == new_arn
+    end
+
+    test "a 400 validation error whose message happens to mention 'not found' is NOT treated as not-found",
+         %{stub: stub, client: client} do
+      # This is exactly the false-positive the old substring-matching code was
+      # vulnerable to: the error CODE is ValidationException (a real failure,
+      # not "the topic doesn't exist"), but the human-readable message text
+      # contains the words "was not found" incidentally (e.g. referencing an
+      # unrelated IAM role). Structured matching on the code must not treat
+      # this as the idempotent not-found case.
+      stale_arn = "arn:aws:sns:us-east-1:123456789012:gone"
+      {:ok, source} = Tracker.update_source(%{sns_topic_arn: stale_arn})
+
+      stub_create_configuration_set(stub)
+
+      AWSStub.stub(stub, :post, @sns_path, fn req ->
+        if req.body =~ "Action=GetTopicAttributes" do
+          {:ok, 400,
+           """
+           <ErrorResponse><Error><Code>ValidationException</Code>
+           <Message>The specified execution role was not found</Message></Error></ErrorResponse>
+           """}
+        else
+          :pass
+        end
+      end)
+
+      assert {:error, message} =
+               SES.provision(source, "https://mail.example.com/webhooks/ses/tok", client)
+
+      assert message =~ "look up SNS topic"
+
+      # Nothing was persisted — we correctly did NOT treat this as "go ahead
+      # and create a new topic".
+      reloaded = Tracker.get_or_create_source()
+      assert reloaded.sns_topic_arn == stale_arn
+    end
+
+    test "a 400 error whose message happens to mention 'already exists' but has an unrelated code is NOT treated as already-exists",
+         %{stub: stub, client: client} do
+      source = Tracker.get_or_create_source()
+
+      AWSStub.stub(stub, :post, @config_sets_path, fn req ->
+        if req.url =~ "event-destinations" do
+          {:ok, 200, ""}
+        else
+          {:ok, 400,
+           ~s({"__type":"ValidationException","message":"A resource with that ARN already exists in another account and cannot be reused."})}
+        end
+      end)
+
+      assert {:error, message} =
+               SES.provision(source, "https://mail.example.com/webhooks/ses/t", client)
+
+      assert message =~ "configuration set"
+
+      reloaded = Tracker.get_or_create_source()
+      assert is_nil(reloaded.sns_topic_arn)
+      assert is_nil(reloaded.configuration_set)
+    end
+
+    test "falls back to status-code semantics (409) when the body doesn't parse as JSON or XML",
+         %{stub: stub, client: client} do
+      source = Tracker.get_or_create_source()
+
+      AWSStub.stub(stub, :post, @config_sets_path, fn req ->
+        if req.url =~ "event-destinations" do
+          {:ok, 200, ""}
+        else
+          {:ok, 409, "not valid json or xml, just a plain string"}
+        end
+      end)
+
+      topic_arn = "arn:aws:sns:us-east-1:123456789012:squatch_mail-events"
+      stub_create_topic(stub, topic_arn)
+      stub_subscribe(stub, "#{topic_arn}:sub-1")
+
+      assert {:ok, _updated} =
+               SES.provision(source, "https://mail.example.com/webhooks/ses/t", client)
+    end
+
+    test "falls back to status-code semantics (404) when the body doesn't parse as JSON or XML",
+         %{stub: stub, client: client} do
+      stale_arn = "arn:aws:sns:us-east-1:123456789012:gone"
+      new_arn = "arn:aws:sns:us-east-1:123456789012:squatch_mail-events"
+      {:ok, source} = Tracker.update_source(%{sns_topic_arn: stale_arn})
+
+      stub_create_configuration_set(stub)
+
+      AWSStub.stub(stub, :post, @sns_path, fn req ->
+        if req.body =~ "Action=GetTopicAttributes" do
+          {:ok, 404, "plain text, not xml"}
+        else
+          :pass
+        end
+      end)
+
+      stub_create_topic(stub, new_arn)
+      stub_subscribe(stub, "#{new_arn}:sub-1")
+
+      assert {:ok, updated} =
+               SES.provision(source, "https://mail.example.com/webhooks/ses/tok", client)
+
+      assert updated.sns_topic_arn == new_arn
     end
   end
 

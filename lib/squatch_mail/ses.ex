@@ -98,9 +98,11 @@ defmodule SquatchMail.SES do
   @doc """
   Builds an `%AWS.Client{}` from the current source row.
 
-  Loads the source via `SquatchMail.Tracker.get_or_create_source/0`.
+  Loads the source via `SquatchMail.Tracker.get_or_create_source/0`. See
+  `client/1` — this returns the same `{:ok, client} | {:error,
+  :missing_credentials}` shape.
   """
-  @spec client() :: AWS.Client.t()
+  @spec client() :: {:ok, AWS.Client.t()} | {:error, :missing_credentials}
   def client, do: client(Tracker.get_or_create_source())
 
   @doc """
@@ -111,22 +113,25 @@ defmodule SquatchMail.SES do
   variables are read (see the moduledoc "Credentials" section). The client's
   HTTP backend is always the shared `SquatchMail.Finch` pool.
 
-  Raises a `RuntimeError` with an actionable message when required credentials
-  are missing.
+  Returns `{:error, :missing_credentials}` — never raises — when required
+  credentials aren't available. A fresh, unconfigured `SquatchMail.Source` is
+  the normal state before a host has visited Base Camp, so this is an expected
+  outcome every caller must handle, not an exceptional one: a LiveView calling
+  `sync_quota/1` or `list_identities/1` against that source must be able to
+  render "not connected yet" instead of crashing the `handle_event`/mount.
   """
-  @spec client(Source.t()) :: AWS.Client.t()
+  @spec client(Source.t()) :: {:ok, AWS.Client.t()} | {:error, :missing_credentials}
   def client(%Source{credentials_mode: "static"} = source) do
     if blank?(source.access_key_id) or blank?(source.secret_access_key) do
-      raise """
-      SquatchMail source is in "static" credentials mode but is missing an \
-      access_key_id and/or secret_access_key. Add the keys on the source, or \
-      switch credentials_mode to "ambient" to read them from the environment.
-      """
-    end
+      {:error, :missing_credentials}
+    else
+      client =
+        source.access_key_id
+        |> AWS.Client.create(source.secret_access_key, source.region)
+        |> put_finch()
 
-    source.access_key_id
-    |> AWS.Client.create(source.secret_access_key, source.region)
-    |> put_finch()
+      {:ok, client}
+    end
   end
 
   def client(%Source{credentials_mode: "ambient"} = source) do
@@ -137,19 +142,15 @@ defmodule SquatchMail.SES do
     token = System.get_env("AWS_SESSION_TOKEN")
 
     if blank?(access_key_id) or blank?(secret_access_key) do
-      raise """
-      SquatchMail source is in "ambient" credentials mode but neither \
-      AWS_ACCESS_KEY_ID nor AWS_SECRET_ACCESS_KEY is set in the environment. \
-      Export static AWS credentials, switch the source to "static" mode with \
-      explicit keys, or inject a pre-built %AWS.Client{} into the SquatchMail.SES \
-      function you're calling. (EC2/ECS instance-role resolution is not yet \
-      implemented — see SquatchMail.SES moduledoc.)
-      """
-    end
+      {:error, :missing_credentials}
+    else
+      client =
+        access_key_id
+        |> AWS.Client.create(secret_access_key, token, region)
+        |> put_finch()
 
-    access_key_id
-    |> AWS.Client.create(secret_access_key, token, region)
-    |> put_finch()
+      {:ok, client}
+    end
   end
 
   defp put_finch(%AWS.Client{} = client) do
@@ -165,10 +166,13 @@ defmodule SquatchMail.SES do
 
   See `provision/3`. Builds the client from the source itself.
   """
-  @spec provision(String.t()) :: {:ok, Source.t()} | {:error, term()}
+  @spec provision(String.t()) :: {:ok, Source.t()} | {:error, :missing_credentials | term()}
   def provision(webhook_url) when is_binary(webhook_url) do
     source = Tracker.get_or_create_source()
-    provision(source, webhook_url, client(source))
+
+    with {:ok, client} <- client(source) do
+      provision(source, webhook_url, client)
+    end
   end
 
   @doc """
@@ -362,10 +366,13 @@ defmodule SquatchMail.SES do
 
   See `sync_quota/2`.
   """
-  @spec sync_quota() :: {:ok, Source.t()} | {:error, term()}
+  @spec sync_quota() :: {:ok, Source.t()} | {:error, :missing_credentials | term()}
   def sync_quota do
     source = Tracker.get_or_create_source()
-    sync_quota(source, client(source))
+
+    with {:ok, client} <- client(source) do
+      sync_quota(source, client)
+    end
   end
 
   @doc """
@@ -398,14 +405,17 @@ defmodule SquatchMail.SES do
   current source unchanged in an `{:ok, source}` tuple. This is the ticket's
   "cache 6h" behaviour.
   """
-  @spec ensure_quota_synced(Source.t() | nil) :: {:ok, Source.t()} | {:error, term()}
+  @spec ensure_quota_synced(Source.t() | nil) ::
+          {:ok, Source.t()} | {:error, :missing_credentials | term()}
   def ensure_quota_synced(source \\ nil)
 
   def ensure_quota_synced(nil), do: ensure_quota_synced(Tracker.get_or_create_source())
 
   def ensure_quota_synced(%Source{} = source) do
     if quota_stale?(source) do
-      sync_quota(source, client(source))
+      with {:ok, client} <- client(source) do
+        sync_quota(source, client)
+      end
     else
       {:ok, source}
     end
@@ -443,8 +453,12 @@ defmodule SquatchMail.SES do
   @doc """
   Lists SES sending identities for the current source. See `list_identities/1`.
   """
-  @spec list_identities() :: {:ok, [identity()]} | {:error, term()}
-  def list_identities, do: list_identities(client())
+  @spec list_identities() :: {:ok, [identity()]} | {:error, :missing_credentials | term()}
+  def list_identities do
+    with {:ok, client} <- client() do
+      list_identities(client)
+    end
+  end
 
   @doc """
   Lists SES sending identities as normalized `t:identity/0` maps.
@@ -496,9 +510,12 @@ defmodule SquatchMail.SES do
 
   See `create_identity/3`. Builds the client from the current source.
   """
-  @spec create_identity(String.t()) :: {:ok, identity()} | {:error, term()}
-  def create_identity(identity) when is_binary(identity),
-    do: create_identity(identity, client())
+  @spec create_identity(String.t()) :: {:ok, identity()} | {:error, :missing_credentials | term()}
+  def create_identity(identity) when is_binary(identity) do
+    with {:ok, client} <- client() do
+      create_identity(identity, client)
+    end
+  end
 
   @doc """
   Creates a new SES sending identity, returning its normalized status.
@@ -527,9 +544,13 @@ defmodule SquatchMail.SES do
 
   See `recheck_identity/2`. Builds the client from the current source.
   """
-  @spec recheck_identity(String.t()) :: {:ok, identity()} | {:error, term()}
-  def recheck_identity(identity) when is_binary(identity),
-    do: recheck_identity(identity, client())
+  @spec recheck_identity(String.t()) ::
+          {:ok, identity()} | {:error, :missing_credentials | term()}
+  def recheck_identity(identity) when is_binary(identity) do
+    with {:ok, client} <- client() do
+      recheck_identity(identity, client)
+    end
+  end
 
   @doc """
   Re-queries a single identity's live verification/DKIM status from SES.
@@ -797,21 +818,77 @@ defmodule SquatchMail.SES do
     end)
   end
 
-  # Heuristics over an error response body to detect idempotent "already exists"
-  # / "not found" cases across SESv2 (JSON) and SNS (XML) shapes.
-  defp already_exists?(%{body: body}) when is_binary(body) do
-    String.contains?(body, "AlreadyExists") or
-      String.contains?(body, "already exists") or
-      String.contains?(body, "Duplicate")
+  # AWS error codes that mean "the thing we tried to create already exists" —
+  # i.e. safe to treat as success for our idempotent create-if-missing flows.
+  # SESv2 (JSON REST) sends `AlreadyExistsException`; SNS/query APIs vary by
+  # service but use the same "AlreadyExists"-family naming.
+  @already_exists_codes ~w(AlreadyExistsException AlreadyExists ResourceAlreadyExistsException
+                           ConflictException)
+
+  # AWS error codes that mean "the thing we looked up doesn't exist" — safe to
+  # treat as "go ahead and create it" for our idempotent flows.
+  @not_found_codes ~w(NotFoundException NotFound ResourceNotFoundException)
+
+  # Structured detection of idempotent "already exists" / "not found" error
+  # responses. Parses the AWS error CODE out of the response body — SESv2
+  # returns JSON with a `__type` field (e.g. `"AlreadyExistsException"`); SNS
+  # and other query-protocol services return XML with a `<Code>` element
+  # (e.g. `"NotFound"`). When no code can be parsed at all (an unrecognized or
+  # truncated body), falls back to HTTP status-code semantics: 409 Conflict
+  # implies "already exists", 404 Not Found implies "not found". This replaces
+  # free-text substring search over the response body, which was liable to
+  # false-match human-readable prose in `message`/`Message` fields that merely
+  # *mentions* the words "not found" or "already exists" without actually being
+  # that error (e.g. a validation error whose message happens to say "the
+  # specified role was not found").
+  defp already_exists?(%{status_code: status, body: body}) do
+    case aws_error_code(body) do
+      nil -> status == 409
+      code -> code in @already_exists_codes
+    end
   end
 
   defp already_exists?(_), do: false
 
-  defp not_found?(%{body: body}) when is_binary(body) do
-    String.contains?(body, "NotFound") or String.contains?(body, "does not exist")
+  defp not_found?(%{status_code: status, body: body}) do
+    case aws_error_code(body) do
+      nil -> status == 404
+      code -> code in @not_found_codes
+    end
   end
 
   defp not_found?(_), do: false
+
+  # Extracts the AWS error code from a response body, trying SESv2's JSON
+  # shape first (`{"__type": "...", "message": "..."}`, where `__type` may
+  # carry a `com.amazonaws.xxx#` namespace prefix that we strip) and falling
+  # back to the XML query-protocol shape SNS uses
+  # (`<ErrorResponse><Error><Code>...</Code>...`). Returns `nil` when the body
+  # doesn't parse as either (callers fall back to status-code semantics).
+  defp aws_error_code(body) when is_binary(body) do
+    json_error_code(body) || xml_error_code(body)
+  end
+
+  defp aws_error_code(_), do: nil
+
+  defp json_error_code(body) do
+    with {:ok, %{"__type" => type}} <- Jason.decode(body) do
+      type |> String.split("#") |> List.last()
+    else
+      _ -> nil
+    end
+  end
+
+  # A minimal, dependency-free extraction of the first <Code>...</Code>
+  # element — the one field we need from SNS/query-protocol XML error bodies.
+  # A full XML parser is unnecessary for one field, and this codebase already
+  # avoids adding an XML-parsing dependency (see CLAUDE.md).
+  defp xml_error_code(body) do
+    case Regex.run(~r/<Code>([^<]+)<\/Code>/, body) do
+      [_, code] -> String.trim(code)
+      _ -> nil
+    end
+  end
 
   # Wraps an AWS error tuple into an actionable, human-readable {:error, msg}
   # without discarding the underlying detail.
