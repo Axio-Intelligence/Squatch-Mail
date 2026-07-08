@@ -464,6 +464,154 @@ defmodule SquatchMail.SESTest do
     end
   end
 
+  ## ---- check_dns (live, injectable resolver) ---------------------------------
+
+  describe "check_dns/2" do
+    setup do
+      identity = %{
+        identity: "example.com",
+        type: :domain,
+        dkim_tokens: ["t0k3n1", "t0k3n2"],
+        dkim_signing_hosted_zone: "dkim.amazonses.com"
+      }
+
+      %{records: SES.dns_records_for(identity)}
+    end
+
+    test "passes every record when the resolver returns exactly the expected values", %{
+      records: records
+    } do
+      resolver = fn name, :in, type -> matching_resolver(name, type) end
+
+      results = SES.check_dns(records, resolver)
+
+      assert length(results) == length(records)
+      assert Enum.all?(results, &(&1.status == :pass))
+      assert Enum.all?(results, &is_list(&1.found))
+    end
+
+    test "flags a CNAME as :warn when it resolves to something else", %{records: records} do
+      resolver = fn
+        ~c"t0k3n1._domainkey.example.com", :in, :cname ->
+          [~c"someone-elses-value.dkim.amazonses.com"]
+
+        name, :in, type ->
+          matching_resolver(name, type)
+      end
+
+      results = SES.check_dns(records, resolver)
+      cname = Enum.find(results, &(&1.name == "t0k3n1._domainkey.example.com"))
+
+      assert cname.status == :warn
+      assert cname.found == ["someone-elses-value.dkim.amazonses.com"]
+    end
+
+    test "flags a record as :missing when the resolver returns no answers", %{records: records} do
+      resolver = fn
+        ~c"t0k3n1._domainkey.example.com", :in, :cname -> []
+        name, :in, type -> matching_resolver(name, type)
+      end
+
+      results = SES.check_dns(records, resolver)
+      cname = Enum.find(results, &(&1.name == "t0k3n1._domainkey.example.com"))
+
+      assert cname.status == :missing
+      assert cname.found == []
+    end
+
+    test "TXT match is a substring check, so an unrelated coexisting TXT record still passes",
+         %{records: records} do
+      resolver = fn
+        ~c"example.com", :in, :txt ->
+          [[~c"some-other-verification=abc123"], [~c"v=spf1 include:amazonses.com ~all"]]
+
+        name, :in, type ->
+          matching_resolver(name, type)
+      end
+
+      results = SES.check_dns(records, resolver)
+      spf = Enum.find(results, &(&1.purpose == :spf))
+
+      assert spf.status == :pass
+      assert length(spf.found) == 2
+    end
+
+    test "flags SPF as :warn when only an unrelated TXT record is present", %{records: records} do
+      resolver = fn
+        ~c"example.com", :in, :txt -> [[~c"some-other-verification=abc123"]]
+        name, :in, type -> matching_resolver(name, type)
+      end
+
+      results = SES.check_dns(records, resolver)
+      spf = Enum.find(results, &(&1.purpose == :spf))
+
+      assert spf.status == :warn
+    end
+
+    test "concatenates multi-segment TXT answers before matching", %{records: records} do
+      # A single TXT record can be split across multiple <=255-byte strings;
+      # :inet_res.lookup/3 returns each TXT record as a list of those segments.
+      long_value = "v=spf1 include:amazonses.com ~all"
+      {first, second} = String.split_at(long_value, 10)
+
+      resolver = fn
+        ~c"example.com", :in, :txt ->
+          [[String.to_charlist(first), String.to_charlist(second)]]
+
+        name, :in, type ->
+          matching_resolver(name, type)
+      end
+
+      results = SES.check_dns(records, resolver)
+      spf = Enum.find(results, &(&1.purpose == :spf))
+
+      assert spf.status == :pass
+    end
+
+    test "a raising resolver is treated as :missing rather than crashing the caller", %{
+      records: records
+    } do
+      resolver = fn _name, :in, _type -> raise "nameserver unreachable" end
+
+      results = SES.check_dns(records, resolver)
+
+      assert Enum.all?(results, &(&1.status == :missing))
+      assert Enum.all?(results, &(&1.found == []))
+    end
+
+    test "defaults to :inet_res.lookup/3 when no resolver is given" do
+      # Smoke test only: we don't assert on the outcome (real DNS, may be
+      # :pass/:warn/:missing depending on environment/network), just that the
+      # 3-arg default doesn't raise and returns the expected shape.
+      record = %{
+        type: :txt,
+        name: "example.com",
+        value: "v=spf1 include:amazonses.com ~all",
+        purpose: :spf
+      }
+
+      results = SES.check_dns([record])
+
+      assert [%{status: status, found: found}] = results
+      assert status in [:pass, :warn, :missing]
+      assert is_list(found)
+    end
+
+    # Answers exactly what dns_records_for/1 for the fixture identity expects,
+    # for any (name, type) pair not overridden by a more specific clause above.
+    defp matching_resolver(~c"t0k3n1._domainkey.example.com", :cname),
+      do: [~c"t0k3n1.dkim.amazonses.com"]
+
+    defp matching_resolver(~c"t0k3n2._domainkey.example.com", :cname),
+      do: [~c"t0k3n2.dkim.amazonses.com"]
+
+    defp matching_resolver(~c"example.com", :txt),
+      do: [[~c"v=spf1 include:amazonses.com ~all"]]
+
+    defp matching_resolver(~c"_dmarc.example.com", :txt), do: [[~c"v=DMARC1; p=none;"]]
+    defp matching_resolver(_name, _type), do: []
+  end
+
   ## ---- stub helpers ---------------------------------------------------------
 
   # Config-set create and event-destination create share the same path; a single

@@ -21,6 +21,10 @@ defmodule SquatchMail.SES do
       identity's live status.
     * **DNS record guidance** (`dns_records_for/1`) — a pure function turning a
       normalized identity map into the CNAME/TXT records a user must publish.
+    * **Live DNS verification** (`check_dns/2`) — resolves those CNAME/TXT
+      records against public DNS (via `:inet_res`, an OTP built-in — no new
+      dependency) and reports pass/warn/missing per record, for a one-click
+      "re-check DNS" action.
 
   ## Building the AWS client
 
@@ -649,6 +653,113 @@ defmodule SquatchMail.SES do
         }
       ]
   end
+
+  ## ---------------------------------------------------------------------------
+  ## DNS record verification (live)
+  ## ---------------------------------------------------------------------------
+
+  @typedoc """
+  The outcome of checking one DNS record against what's actually published.
+
+    * `:pass` — the record resolves and matches the expected value.
+    * `:warn` — the record resolves but doesn't match (e.g. a CNAME pointing
+      somewhere else, or a TXT record present but not the expected value —
+      common when a domain already has an unrelated TXT record at the same
+      name).
+    * `:missing` — nothing resolves for that name/type at all.
+  """
+  @type dns_check_result :: :pass | :warn | :missing
+
+  @typedoc "One `dns_record/0`, annotated with its live verification outcome."
+  @type checked_dns_record :: %{
+          type: :cname | :txt,
+          name: String.t(),
+          value: String.t(),
+          purpose: :dkim | :spf | :dmarc,
+          status: dns_check_result(),
+          found: [String.t()]
+        }
+
+  @doc """
+  Live DNS re-check for a domain identity: resolves every expected DKIM
+  CNAME, SPF TXT, and DMARC TXT record and reports pass/warn/missing per
+  record.
+
+  `expected_records` is normally the output of `dns_records_for/1` for the
+  same identity. The `resolver` argument defaults to `:inet_res.lookup/3`
+  (an OTP built-in — no new dependency) and can be injected for testing or
+  to point at a specific nameserver; it must accept the same three
+  positional arguments `:inet_res.lookup/3` does: `(name_charlist, class,
+  type)`, returning a list of answers (binaries for `:txt` — actually a list
+  of character-list segments per TXT string, hence the flattening below —
+  and a domain charlist for `:cname`).
+
+  Returns the same list `dns_records_for/1` produced, each record augmented
+  with `:status` (`t:dns_check_result/0`) and `:found` (the raw values seen
+  at that name, for display — e.g. showing a user the CNAME they
+  accidentally pointed elsewhere). This is a live, synchronous check: each
+  record is one DNS query, so calling this for an identity with several DKIM
+  tokens makes several queries. Safe to call from a "re-check DNS" button
+  (`SquatchMail.SES.recheck_identity/1,2` covers the *SES-side* verification
+  status; this covers whether the records are actually visible in DNS,
+  which can lag or be misconfigured independently of what SES has cached).
+  """
+  @spec check_dns([dns_record()], (charlist(), atom(), atom() -> list())) :: [
+          checked_dns_record()
+        ]
+  def check_dns(expected_records, resolver \\ &:inet_res.lookup/3)
+      when is_list(expected_records) and is_function(resolver, 3) do
+    Enum.map(expected_records, &check_dns_record(&1, resolver))
+  end
+
+  defp check_dns_record(%{type: :cname, name: name, value: expected} = record, resolver) do
+    found = lookup(resolver, name, :cname) |> Enum.map(&to_display_string/1)
+    status = if expected in found, do: :pass, else: dns_status(found)
+    Map.merge(record, %{status: status, found: found})
+  end
+
+  defp check_dns_record(%{type: :txt, name: name, value: expected} = record, resolver) do
+    found = lookup(resolver, name, :txt) |> Enum.map(&flatten_txt/1)
+
+    status =
+      if Enum.any?(found, &String.contains?(&1, expected)), do: :pass, else: dns_status(found)
+
+    Map.merge(record, %{status: status, found: found})
+  end
+
+  defp dns_status([]), do: :missing
+  defp dns_status(_found), do: :warn
+
+  # Returns the raw list of answers from the resolver, untouched — CNAME and
+  # TXT answers need different flattening (see check_dns_record/2 above), so
+  # this stays a thin, format-agnostic wrapper around the resolver call.
+  defp lookup(resolver, name, type) do
+    name
+    |> String.to_charlist()
+    |> resolver.(:in, type)
+  rescue
+    # A resolver that raises (unreachable nameserver, timeout translated to an
+    # exception by a custom injected resolver, etc.) is treated as "nothing
+    # resolved" rather than crashing the caller — DNS lookups are exactly the
+    # kind of network call that shouldn't take down a "re-check" button.
+    _ -> []
+  catch
+    :exit, _ -> []
+  end
+
+  # :inet_res.lookup/3 CNAME answers are a single charlist (the target domain).
+  defp to_display_string(answer) when is_list(answer), do: List.to_string(answer)
+  defp to_display_string(answer) when is_binary(answer), do: answer
+  defp to_display_string(answer), do: to_string(answer)
+
+  # TXT answers from :inet_res.lookup/3 are themselves a list of charlists (a
+  # TXT record can be split into multiple <=255-byte strings); concatenate them
+  # back into the single logical value a human published.
+  defp flatten_txt(segments) when is_list(segments) do
+    Enum.map_join(segments, &to_display_string/1)
+  end
+
+  defp flatten_txt(segment), do: to_display_string(segment)
 
   ## ---------------------------------------------------------------------------
   ## Response helpers
