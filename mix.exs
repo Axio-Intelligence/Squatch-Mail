@@ -2,7 +2,7 @@ defmodule SquatchMail.MixProject do
   use Mix.Project
 
   @version "0.1.0"
-  @source_url "https://github.com/axio-intelligence/squatch_mail"
+  @source_url "https://github.com/Axio-Intelligence/Squatch-Mail"
 
   def project do
     [

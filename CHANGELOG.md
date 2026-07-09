@@ -6,12 +6,25 @@ follows [Semantic Versioning](https://semver.org/) once it reaches 1.0.
 
 ## [Unreleased]
 
-Dashboard foundation (router macro, three-layer auth, layout, self-contained
-assets) is being built against `main` but is not yet merged. See
-`FEATURES.md` for the full parity checklist against LaraSend.
+Nothing yet.
+
+## [0.1.0] — 2026-07-09
+
+First release published to Hex. See `FEATURES.md` for the full parity
+checklist against LaraSend.
 
 ### Added
 
+- **The dashboard.** One router macro (`squatch_mail_dashboard`) mounts the
+  full LiveView dashboard with self-contained, content-hashed assets and
+  three-layer access control (host-owned auth via `:on_mount`, HTTP Basic
+  Auth fallback, refuse-by-default otherwise — see `README.md`'s "Keeping
+  the Forest Safe"). Pages: the Trail Log (live activity feed with stats,
+  filters, and CSV export), the per-email Sighting inspector (preview,
+  headers, Footprint timeline, raw), the Do-Not-Disturb suppression
+  registry, and Base Camp (SES connection, one-click provisioning, quota,
+  identities, DNS guidance with live re-checks via
+  `SquatchMail.SES.check_dns/2`).
 - **Sightings, Bounces, and Complaints pages.** The sidebar's three
   remaining nav items now have routes (`/sightings`, `/bounces`,
   `/complaints`) instead of 404ing. All three are served by
@@ -28,14 +41,6 @@ assets) is being built against `main` but is not yet merged. See
   backed by `SquatchMail.Tracker.bounce_details/1` /
   `complaint_details/1` — one latest-event-per-email query each, no per-row
   N+1.
-
-## [0.1.0] — 2026-07-08
-
-Pre-1.0, not yet published to Hex. This is the working baseline of
-everything committed to `main` so far.
-
-### Added
-
 - **Core data layer.** `SquatchMail.Migrations` — versioned, host-owned
   migrations following the Oban/ErrorTracker pattern (`up/1`, `down/1`,
   `migrated_version/1`; version tracked via a Postgres `COMMENT ON TABLE`,
@@ -102,13 +107,8 @@ everything committed to `main` so far.
 
 ### Known gaps
 
-- The dashboard itself — activity feed, email inspector, stats,
-  suppression management, and Base Camp settings pages — is not yet merged
-  to `main`. The router macro and three-layer auth model are designed but
-  should be treated as a draft until they land (see the note in `README.md`'s
-  "Keeping the Forest Safe" section).
-- Live DNS re-checking (actual `:inet_res` lookups against published DKIM/SPF
-  records) is not implemented; `SquatchMail.SES.recheck_identity/1,2`
-  currently re-queries SES's own verification status instead.
 - `credentials_mode: "static"` stores `access_key_id`/`secret_access_key` as
   plaintext columns; encryption at rest is a tracked TODO, not yet done.
+- Ambient credentials read `AWS_*` environment variables only; EC2/ECS
+  instance- and task-role resolution via the metadata service is a
+  documented follow-up (see `SquatchMail.SES`).
