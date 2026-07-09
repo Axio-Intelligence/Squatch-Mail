@@ -25,6 +25,9 @@ squatch_mail-*.tar
 # Temporary files, for example, from tests.
 /tmp/
 
+# The throwaway Phoenix host app scaffolded by bin/setup_test_host.
+/test_host/
+
 # Ignore assets that are produced by build tools.
 /priv/static/assets/
 

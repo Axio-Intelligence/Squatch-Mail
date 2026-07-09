@@ -135,7 +135,7 @@ defmodule SquatchMail.Web.SightingLiveTest do
     back = URI.encode_query(%{"back" => "?status=sent"})
     {:ok, _view, html} = live(conn, "/squatch/sightings/#{email.public_id}?#{back}")
 
-    assert html =~ "Back to Trail Log"
+    assert html =~ "Back to the trail"
     assert html =~ ~s(href="/squatch?status=sent")
   end
 end

@@ -2,36 +2,54 @@ defmodule SquatchMail.Web.Components.Icons do
   @moduledoc """
   The SquatchMail footprint mark and small outlined nav icons.
 
-  The footprint (5 toes + pad) is the one recurring visual motif called for
-  throughout DESIGN.md — logo, nav, loading spinner, empty states, and the
-  session easter egg all reuse this same `footprint/1` component so the mark
-  stays consistent everywhere it appears.
+  The footprint (the landing page's `Footprint.astro` bigfoot track: long
+  sole, arch details, five uneven toes) is the one recurring visual motif
+  called for throughout DESIGN.md — loading spinner, empty states, and the
+  event timeline all reuse this same `footprint/1` component so the mark
+  stays consistent everywhere it appears, on the landing page and in the
+  dashboard alike.
   """
 
   use Phoenix.Component
 
   attr :class, :string, default: nil
+  attr :mirrored, :boolean, default: false
   attr :rest, :global
 
   @doc """
-  Renders a single sasquatch footprint: one pad + five toes.
+  Renders a single bigfoot track: long human-like sole, broad forefoot,
+  heavy heel, uneven toes. Same geometry as the landing page's
+  `Footprint.astro` — the one mark, everywhere. Pass `mirrored` for the
+  opposite foot (walking-trail alternation).
   """
   def footprint(assigns) do
     ~H"""
     <svg
-      class={["sq-footprint", @class]}
-      viewBox="0 0 32 44"
+      class={["sq-footprint", @mirrored && "sq-footprint--mirrored", @class]}
+      viewBox="0 0 48 76"
       fill="currentColor"
       xmlns="http://www.w3.org/2000/svg"
       aria-hidden="true"
       {@rest}
     >
-      <ellipse cx="16" cy="29" rx="10.5" ry="14" />
-      <ellipse cx="4.5" cy="8" rx="3.1" ry="4.3" transform="rotate(-18 4.5 8)" />
-      <ellipse cx="11.4" cy="3.6" rx="3.2" ry="4.6" transform="rotate(-8 11.4 3.6)" />
-      <ellipse cx="19" cy="3" rx="3.2" ry="4.6" transform="rotate(4 19 3)" />
-      <ellipse cx="26.2" cy="4.8" rx="3.1" ry="4.4" transform="rotate(14 26.2 4.8)" />
-      <ellipse cx="30.8" cy="10.5" rx="2.8" ry="4" transform="rotate(28 30.8 10.5)" />
+      <path d="M10.2 25.8c1.8-6 7.8-9.5 15.6-9.2 8.3.3 15 4.3 17 10.4 1.8 5.5-.2 10.4-2.5 15.6-1.3 3-2.1 6-2.4 9.4-.5 5.7-.4 10.7-3.5 14.3-2.2 2.6-5.7 4.4-10 4.3-4.9-.1-8.8-2.1-11.2-5.1-3.3-4.2-3.1-10.2-3-16.1.1-4.4-1-7.8-2.2-11.4-1.4-4.2-.1-8.2 2.2-12.2Z" />
+      <path
+        opacity="0.25"
+        d="M18.4 24.9c4.9-2.6 12.7-2.2 16.6 1.3 2.5 2.3 2.4 6.4 1.2 9.4-1.9 4.9-5.9 7.5-11.8 7.5-6.2 0-10.1-2.8-11.5-7.2-1.4-4.5 1.1-8.7 5.5-11Z"
+      />
+      <path
+        opacity="0.2"
+        d="M18.1 47.1c3.7 1.5 8.2 1.7 13.7.5M17.5 56.7c3.2 2.1 7.3 2.5 12.4 1.2"
+        fill="none"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-width="2"
+      />
+      <ellipse cx="8.7" cy="17.7" rx="4.1" ry="6.7" transform="rotate(-16 8.7 17.7)" />
+      <ellipse cx="17.1" cy="9.9" rx="4.5" ry="6.8" transform="rotate(-8 17.1 9.9)" />
+      <ellipse cx="25.8" cy="7.3" rx="4.4" ry="6.4" transform="rotate(2 25.8 7.3)" />
+      <ellipse cx="34.1" cy="9.9" rx="4" ry="5.9" transform="rotate(12 34.1 9.9)" />
+      <ellipse cx="41.3" cy="16.6" rx="3.5" ry="5.3" transform="rotate(22 41.3 16.6)" />
     </svg>
     """
   end
@@ -46,7 +64,7 @@ defmodule SquatchMail.Web.Components.Icons do
   def spinner(assigns) do
     ~H"""
     <span class="sq-spinner" role="status" aria-label={@label}>
-      <.footprint /><.footprint /><.footprint /><.footprint />
+      <.footprint /><.footprint mirrored /><.footprint /><.footprint mirrored />
     </span>
     """
   end

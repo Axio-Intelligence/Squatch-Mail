@@ -24,11 +24,12 @@ defmodule SquatchMail.Web.Live.Sighting do
 
   ## Back-navigation preserves filters
 
-  The "back to Trail Log" link reads a `?back=` query param (a URL-encoded
-  copy of whatever filter query string `TrailLog` was showing when the user
-  clicked into this sighting — see `TrailLog`'s `sighting_path/2`) and
-  round-trips it, rather than hard-coding a plain link back to
-  `dashboard_path`, so returning from the inspector doesn't reset filters.
+  The "back to the trail" link reads a `?back=` query param (the page path
+  suffix and filter query string `TrailLog` was showing when the user clicked
+  into this sighting — see `TrailLog`'s `sighting_path/2`) and round-trips
+  it, rather than hard-coding a plain link back to `dashboard_path`, so
+  returning from the inspector lands on the same page (Trail Log, Sightings,
+  Bounces, or Complaints) with its filters intact.
   """
 
   use Phoenix.LiveView
@@ -136,7 +137,7 @@ defmodule SquatchMail.Web.Live.Sighting do
   defp back_link(assigns) do
     ~H"""
     <a class="sq-btn sq-btn--ghost" href={@dashboard_path <> (@back_query || "")}>
-      ← Back to Trail Log
+      ← Back to the trail
     </a>
     """
   end
@@ -267,7 +268,7 @@ defmodule SquatchMail.Web.Live.Sighting do
     <% else %>
       <div class="sq-timeline">
         <div :for={event <- @email.events} class="sq-timeline__item">
-          <Icons.footprint class="sq-timeline__icon" style="width: 18px; height: 24px;" />
+          <Icons.footprint class="sq-timeline__icon" style="width: 15px; height: 24px;" />
           <div class="sq-timeline__content">
             <span class="sq-timeline__label"><%= event_label(event) %></span>
             <span class="sq-timeline__timestamp"><%= format_ts(event.occurred_at) %></span>

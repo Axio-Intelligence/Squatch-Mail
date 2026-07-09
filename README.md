@@ -63,8 +63,8 @@ TABLE`-tracked schema migration.
 What the expedition has actually turned up so far:
 
 - **Zero-config send observability.** SquatchMail attaches to Swoosh's
-  telemetry events (`[:swoosh, :deliver, :stop | :exception]`) at boot and
-  captures every send your app makes through its *existing* Swoosh mailer —
+  telemetry events (`[:swoosh, :deliver | :deliver_many, :stop | :exception]`)
+  at boot and captures every send your app makes through its *existing* Swoosh mailer —
   no adapter swap, no proxy, no code changes to your send path. This is the
   thing LaraSend and friends structurally cannot do, because they aren't
   living inside your BEAM node.
@@ -78,11 +78,14 @@ What the expedition has actually turned up so far:
   configuration set, SNS topic, HTTPS subscription, and event destination for
   you via `AWS.SESv2`/`AWS.SNS` — the manual afternoon LaraSend asks you to
   spend in the AWS console, done from a button.
-- **Identity + DKIM guidance.** List your sending identities, see
-  verification and DKIM status, and get copy-paste DNS records (CNAME for
-  DKIM, TXT for SPF/DMARC) instead of AWS's own documentation tabs. Quota
-  sync, cached for six hours, so Base Camp doesn't hammer `GetAccount` on
-  every page load.
+- **Identity + DKIM guidance, with live DNS re-checks.** List your sending
+  identities, see verification and DKIM status, and get copy-paste DNS
+  records (CNAME for DKIM, TXT for SPF/DMARC) instead of AWS's own
+  documentation tabs. A "re-check DNS" button resolves each expected record
+  against public DNS (`SquatchMail.SES.check_dns/2`, via OTP's `:inet_res` —
+  no new dependency) and reports pass/warn/missing per record, alongside
+  SES's own verification verdict. Quota sync, cached for six hours, so Base
+  Camp doesn't hammer `GetAccount` on every page load.
 - **Status that only ever tells the truth.** A later, weaker event can never
   quietly downgrade an email's status — a delivery notification arriving
   after a click is recorded as a Footprint but doesn't un-click the email,
@@ -107,10 +110,15 @@ What the expedition has actually turned up so far:
   same way Oban and ErrorTracker do it — one host-owned migration file that
   calls `SquatchMail.Migrations.up()`, safe to re-run as new versions ship.
 
-Still being tracked, not yet confirmed sightings: the dashboard itself —
-activity feed, email inspector, suppression management, Base Camp settings
-UI. See the checklist below and [`FEATURES.md`](FEATURES.md) for the full
-inventory.
+- **The dashboard itself.** Trail Log (live activity feed with stats,
+  filters, and CSV export), the Sightings archive, dedicated Bounces and
+  Complaints views, the per-email Sighting inspector (preview, headers,
+  Footprint timeline, raw), the Do-Not-Disturb registry, and Base Camp —
+  all served from one router macro with self-contained assets.
+
+Still being tracked, not yet a confirmed sighting: credential encryption at
+rest for static-mode AWS keys. See the checklist below and
+[`FEATURES.md`](FEATURES.md) for the full inventory.
 
 ## What raw SES makes you build yourself
 
@@ -155,8 +163,7 @@ How a Sighting actually gets tracked, in two halves — outbound and inbound:
 ```
 
 Both halves land in the same `squatch_mail` Postgres schema, which the
-dashboard (in progress — see the checklist) reads from directly. No queue,
-no separate service, no polling.
+dashboard reads from directly. No queue, no separate service, no polling.
 
 ## SETTING UP BASE CAMP
 
@@ -240,11 +247,9 @@ If you'd rather not use igniter, or want full control over each step:
    end
    ```
 
-   Visit `/squatch` to see the dashboard once it ships (see the checklist
-   below for current status). No other code changes are required —
-   SquatchMail observes mail sent through Swoosh automatically via
-   telemetry, and this step is safe to add now even before the dashboard
-   pages themselves land.
+   Visit `/squatch` to see the dashboard. No other code changes are
+   required — SquatchMail observes mail sent through Swoosh automatically
+   via telemetry.
 
 5. **Teach your endpoint to preserve the evidence.** SquatchMail's SNS
    webhook needs the *exact bytes* SNS sent to verify the request's
@@ -303,11 +308,13 @@ If you'd rather not use igniter, or want full control over each step:
 
 ## KEEPING THE FOREST SAFE
 
-SquatchMail ships three layers of dashboard access control, checked in
-order (`SquatchMail.Web.Router` + `SquatchMail.Web.Plugs.Auth`). Exactly
-one applies to any given request to a dashboard page (Trail Log, Sightings,
-Suppressions, Base Camp). The inbound SNS webhook route is never covered by
-any of them — it authenticates itself independently (see below).
+SquatchMail ships three layers of dashboard access control
+(`SquatchMail.Web.Router` + `SquatchMail.Web.Plugs.Auth`). Exactly one
+applies to any given request to a dashboard page (Trail Log, Sightings,
+Suppressions, Base Camp): a configured `:basic_auth` wins over everything;
+otherwise a host-supplied `:on_mount` means the host owns auth; otherwise
+the dashboard refuses to render. The inbound SNS webhook route is never
+covered by any of them — it authenticates itself independently (see below).
 
 **a) Host-owned authentication (recommended).** Mount
 `squatch_mail_dashboard` inside your own authenticated pipeline and pass your
@@ -323,27 +330,34 @@ end
 This is the only layer that can express real authorization — roles,
 per-user scoping, SSO. Layers (b) and (c) are meant as a safety net for hosts
 that mount the dashboard without wiring up their own auth, not a substitute
-for doing so.
+for doing so. Note that both the `pipe_through` and the `:on_mount` hook
+matter: the plug pipeline gates the initial HTTP request, and the hook
+re-checks on the LiveView socket — see the `SquatchMail.Web.Router`
+moduledoc for why a plug alone can't protect the websocket after mount.
 
-**b) Built-in fallback: HTTP Basic Auth.** The design calls for a
-configuration like
+**b) Built-in fallback: HTTP Basic Auth.** Configure
 
 ```elixir
 config :squatch_mail,
   basic_auth: [username: "squatch", password: System.fetch_env!("SQUATCH_MAIL_PASSWORD")]
 ```
 
-to protect every dashboard route with `Plug.BasicAuth` — for small
-deployments that want *something* stronger than wide open without standing
-up a real admin pipeline.
+and every dashboard route is protected by `Plug.BasicAuth` (a real 401 with
+a `www-authenticate` challenge) — for small deployments that want
+*something* stronger than wide open without standing up a real admin
+pipeline. When set, this takes precedence over everything else, including a
+configured `:on_mount` — setting `:basic_auth` is an explicit, unambiguous
+request for that gate.
 
-**c) Safe default: refuse.** If neither (a) nor (b) applies, the design has
-SquatchMail check a runtime flag (not `Mix.env()`, which doesn't exist in a
-release and would silently disable this exact safeguard in production) and
-render a plain-language refusal page instead of dashboard data until access
-control is configured.
+**c) Safe default: refuse.** If neither (a) nor (b) applies, SquatchMail
+checks `Application.get_env(:squatch_mail, :allow_unauthenticated, false)` —
+a runtime flag, not `Mix.env()`, which doesn't exist in a release and would
+silently disable this exact safeguard in production. Unless that flag is
+explicitly `true` (fine in `dev.exs`; never set it in production), every
+dashboard request is halted with a 403 refusal page that explains the three
+options above instead of rendering any data.
 
-**The SNS webhook — this part is real and committed.** `SquatchMail.SNS.MessageVerifier`
+**The SNS webhook.** `SquatchMail.SNS.MessageVerifier`
 hand-verifies inbound SNS message signatures (SigV1/SigV2) against
 `:public_key`, with no third-party dependency, validating the
 `SigningCertURL` host/scheme before ever fetching it and caching parsed
@@ -359,9 +373,12 @@ read from the environment (`credentials_mode: "ambient"`, the default — no
 keys touch your database) or, if you opt into `credentials_mode: "static"`,
 stored as plaintext columns on the `sources` table today. Encrypting
 `access_key_id`/`secret_access_key` at rest is a known gap, tracked as a TODO
-in `SquatchMail.Source` — prefer ambient credentials (an IAM instance role,
-or environment variables injected by your platform) until that lands. This
-part is accurate as of the committed `SquatchMail.Source` schema.
+in `SquatchMail.Source` — prefer ambient credentials until that lands. Note
+that ambient mode reads `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/
+`AWS_SESSION_TOKEN` from the environment only — it does **not** resolve EC2
+instance or ECS task role credentials via the metadata service (a documented
+follow-up in `SquatchMail.SES`). On a role-based deployment, export the
+credentials into the environment or inject your own `%AWS.Client{}`.
 
 **Found a security issue?** See [`SECURITY.md`](SECURITY.md) for how to
 report it.
@@ -381,13 +398,13 @@ open pull request or a teammate's working tree.
 | Core schema (emails, recipients, attachments, events, suppressions, webhook logs, source) | Shipped | `SquatchMail.Tracker` context |
 | SES event ingestion (SNS webhook, signature verification, event normalizer) | Shipped | `SquatchMail.SNS.MessageVerifier`/`Processor`, hand-rolled signatures, no `ex_aws` |
 | Suppression list (hard bounce/complaint permanent, soft bounce expiring) | Shipped | enforced in `SquatchMail.Tracker` and the SNS processor |
-| One-click SES provisioning (config set + SNS topic + subscription) | Shipped | `SquatchMail.SES.provision/2` — LaraSend requires manual console setup |
-| SES quota sync (6h cache) | Shipped | `SquatchMail.SES.sync_quota/1` |
+| One-click SES provisioning (config set + SNS topic + subscription) | Shipped | `SquatchMail.SES.provision/1` — LaraSend requires manual console setup |
+| SES quota sync (6h cache) | Shipped | `SquatchMail.SES.ensure_quota_synced/1` |
 | Identity list + DKIM/verification status + DNS record guidance | Shipped | `SquatchMail.SES.list_identities/1`, `dns_records_for/1` |
-| Live DNS re-check | Planned | currently re-queries SES's own verification status; live `:inet_res` lookups are a follow-up |
+| Live DNS re-check | Shipped | `SquatchMail.SES.check_dns/2` resolves expected records via `:inet_res`; wired to Base Camp's "re-check DNS" button alongside the SES-side `recheck_identity/1` |
 | Dashboard foundation (router macro, auth, layout, self-contained assets) | Shipped | `SquatchMail.Web.Router` — one macro, embedded assets, three auth layers |
-| Activity feed + email inspector + stats | Planned | Trail Log, Sighting inspector |
-| Suppressions / bounces / complaints / settings pages | Planned | Do-Not-Disturb registry, Base Camp |
+| Activity feed + email inspector + stats | Shipped | Trail Log, Sightings archive, Sighting inspector |
+| Suppressions / bounces / complaints / settings pages | Shipped | Do-Not-Disturb registry, Bounces/Complaints views, Base Camp |
 | Complaint-rate auto-pause circuit breaker | Shipped | `SquatchMail.Guard.check/1`, min-volume floor, 0.1% default threshold |
 | Send-path enforcement (optional) | Shipped | `SquatchMail.Adapters.Watchtower` — opt-in Swoosh adapter, blocks rather than only observes |
 | Retention pruning | Shipped | `SquatchMail.Pruner` runs `Tracker.prune/0` on a timer; also prunes `webhook_logs` on a fixed 30-day window |
@@ -416,12 +433,61 @@ over release.
 
 ## JOIN THE EXPEDITION
 
-Issues and pull requests are welcome — this is early, pre-1.0 work, and the
-dashboard itself (the part you'd actually click around in) is still being
-built. Read `CLAUDE.md` for the naming conventions this codebase holds
+Issues and pull requests are welcome — this is early, pre-1.0 work.
+Read `CLAUDE.md` for the naming conventions this codebase holds
 itself to (boring code, bigfoot-flavored UI copy only) before sending a
 patch, and see [`SECURITY.md`](SECURITY.md) if what you found is a
 vulnerability rather than a bug.
+
+### Working on SquatchMail locally
+
+You need Elixir 1.15+ and a Postgres to point at — either one you run
+yourself (connection settings honor the standard
+`PGUSER`/`PGPASSWORD`/`PGHOST`/`PGPORT` environment variables) or the
+Dockerized one the test host brings along (see loop 3; once it exists,
+`PGPORT=5433 PGUSER=postgres PGPASSWORD=postgres` points loops 1 and 2 at
+it, no local Postgres install required). Three loops, from fastest to most
+realistic:
+
+1. **The test suite.** `mix test` — creates and migrates its own
+   `squatch_mail_test` database. Run it before sending a patch.
+
+2. **The dashboard preview.** `mix dev` boots a minimal Phoenix endpoint
+   with the dashboard at [http://localhost:4000/squatch](http://localhost:4000/squatch),
+   backed by a `squatch_mail_dev` database that's created and migrated
+   automatically. This is the fast loop for dashboard/UI work. Run it as
+   `iex -S mix dev` and you can send emails through the preview's Swoosh
+   mailer (`SquatchMailDev.Mailer`) to watch them flow through the capture
+   pipeline — see the header of `dev.exs` for a copy-paste snippet.
+
+3. **A real host app.** For anything touching the installer, migrations, or
+   the host-integration story, scaffold a throwaway Phoenix app that embeds
+   SquatchMail the way a real project would:
+
+   ```bash
+   bin/setup_test_host
+   ```
+
+   This generates `test_host/` (gitignored) with `mix phx.new`, adds
+   SquatchMail as a *path dependency* pointing back at your checkout, runs
+   `mix squatch_mail.install` — so it doubles as a smoke test of the
+   igniter installer against a stock Phoenix app — and writes a
+   `Dockerfile` + `docker-compose.yml` pinned to the latest stable
+   Elixir/OTP and Postgres. Then:
+
+   ```bash
+   cd test_host
+   docker compose up --build
+   ```
+
+   (No Docker? `mix phx.server` works too, against whatever Postgres your
+   `PG*` variables point at.)
+
+   The dashboard is at `/squatch`, Swoosh's local mailbox at `/dev/mailbox`;
+   send mail through `TestHost.Mailer` and it shows up in both. Your
+   checkout is bind-mounted into the app container, so library changes are
+   picked up on recompile — restart the app service. Delete the directory
+   and re-run the script whenever you want a fresh host.
 
 ## License
 

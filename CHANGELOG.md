@@ -10,6 +10,25 @@ Dashboard foundation (router macro, three-layer auth, layout, self-contained
 assets) is being built against `main` but is not yet merged. See
 `FEATURES.md` for the full parity checklist against LaraSend.
 
+### Added
+
+- **Sightings, Bounces, and Complaints pages.** The sidebar's three
+  remaining nav items now have routes (`/sightings`, `/bounces`,
+  `/complaints`) instead of 404ing. All three are served by
+  `SquatchMail.Web.Live.TrailLog` via `live_action` page configs: the
+  Sightings archive lists every email on record (all-time default range);
+  Bounces and Complaints are the same table locked to status
+  `bounced`/`complained` — the status select is hidden and a hand-typed
+  `?status=` param can't unlock it. CSV export links on each page carry the
+  locked status and effective range, and the Sighting inspector's back link
+  now returns to whichever page (and filter set) the user came from.
+  Instead of the Trail Log's engagement column, Bounces shows a Reason
+  column (SES `bounceType · bounceSubType` plus the recipient's
+  `diagnosticCode`) and Complaints shows the ISP's `complaintFeedbackType`,
+  backed by `SquatchMail.Tracker.bounce_details/1` /
+  `complaint_details/1` — one latest-event-per-email query each, no per-row
+  N+1.
+
 ## [0.1.0] — 2026-07-08
 
 Pre-1.0, not yet published to Hex. This is the working baseline of

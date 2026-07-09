@@ -454,6 +454,123 @@ defmodule SquatchMail.TrackerTest do
     end
   end
 
+  describe "bounce_details/1 and complaint_details/1" do
+    test "summarizes the latest bounce event's type, subtype, and recipient-matched diagnostic" do
+      {:ok, email} =
+        Tracker.record_email(%{from_email: "a@example.com", message_id: "msg-bounce-detail-1"})
+
+      {:ok, _older} =
+        Tracker.record_event(%{
+          event_type: "bounce",
+          message_id: "msg-bounce-detail-1",
+          recipient: "gone@example.com",
+          occurred_at: ~U[2026-07-01 12:00:00.000000Z],
+          payload: %{"bounce" => %{"bounceType" => "Transient", "bounceSubType" => "General"}}
+        })
+
+      {:ok, _latest} =
+        Tracker.record_event(%{
+          event_type: "bounce",
+          message_id: "msg-bounce-detail-1",
+          recipient: "gone@example.com",
+          occurred_at: ~U[2026-07-02 12:00:00.000000Z],
+          payload: %{
+            "bounce" => %{
+              "bounceType" => "Permanent",
+              "bounceSubType" => "NoEmail",
+              "bouncedRecipients" => [
+                %{"emailAddress" => "other@example.com", "diagnosticCode" => "smtp; 550 other"},
+                %{
+                  "emailAddress" => "gone@example.com",
+                  "diagnosticCode" => "smtp; 550 5.1.1 user unknown"
+                }
+              ]
+            }
+          }
+        })
+
+      details = Tracker.bounce_details([email.id])
+
+      assert details[email.id] == %{
+               bounce_type: "Permanent",
+               bounce_subtype: "NoEmail",
+               diagnostic: "smtp; 550 5.1.1 user unknown"
+             }
+    end
+
+    test "falls back to the first bounced recipient's diagnostic, and to nil fields on bare payloads" do
+      {:ok, unmatched} =
+        Tracker.record_email(%{from_email: "a@example.com", message_id: "msg-bounce-detail-2"})
+
+      {:ok, _} =
+        Tracker.record_event(%{
+          event_type: "bounce",
+          message_id: "msg-bounce-detail-2",
+          recipient: "someone-else@example.com",
+          payload: %{
+            "bounce" => %{
+              "bounceType" => "Permanent",
+              "bouncedRecipients" => [
+                %{"emailAddress" => "first@example.com", "diagnosticCode" => "smtp; 550 first"}
+              ]
+            }
+          }
+        })
+
+      {:ok, bare} =
+        Tracker.record_email(%{from_email: "a@example.com", message_id: "msg-bounce-detail-3"})
+
+      {:ok, _} =
+        Tracker.record_event(%{
+          event_type: "bounce",
+          message_id: "msg-bounce-detail-3",
+          recipient: "gone@example.com",
+          payload: %{}
+        })
+
+      {:ok, no_events} =
+        Tracker.record_email(%{from_email: "a@example.com", message_id: "msg-bounce-detail-4"})
+
+      details = Tracker.bounce_details([unmatched.id, bare.id, no_events.id])
+
+      assert details[unmatched.id].diagnostic == "smtp; 550 first"
+
+      assert details[bare.id] == %{bounce_type: nil, bounce_subtype: nil, diagnostic: nil}
+      refute Map.has_key?(details, no_events.id)
+      assert Tracker.bounce_details([]) == %{}
+    end
+
+    test "summarizes the latest complaint event's feedback type" do
+      {:ok, email} =
+        Tracker.record_email(%{from_email: "a@example.com", message_id: "msg-complaint-detail-1"})
+
+      {:ok, _} =
+        Tracker.record_event(%{
+          event_type: "complaint",
+          message_id: "msg-complaint-detail-1",
+          recipient: "angry@example.com",
+          payload: %{"complaint" => %{"complaintFeedbackType" => "abuse"}}
+        })
+
+      {:ok, no_feedback} =
+        Tracker.record_email(%{from_email: "a@example.com", message_id: "msg-complaint-detail-2"})
+
+      {:ok, _} =
+        Tracker.record_event(%{
+          event_type: "complaint",
+          message_id: "msg-complaint-detail-2",
+          recipient: "angry@example.com",
+          payload: %{"complaint" => %{}}
+        })
+
+      details = Tracker.complaint_details([email.id, no_feedback.id])
+
+      assert details[email.id] == %{feedback_type: "abuse"}
+      assert details[no_feedback.id] == %{feedback_type: nil}
+      assert Tracker.complaint_details([]) == %{}
+    end
+  end
+
   describe "stats/1" do
     setup do
       # Current window: [base, base + 1h). Prior window: [base - 1h, base).

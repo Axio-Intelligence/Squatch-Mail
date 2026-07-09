@@ -39,8 +39,12 @@ defmodule SquatchMail.Web.Layouts do
     <div class="sq-shell sq-root">
       <aside class="sq-sidebar">
         <a href={@dashboard_path} class="sq-sidebar__logo">
-          <Icons.footprint style="width: 22px; height: 30px;" />
-          <span class="sq-sidebar__wordmark">SQUATCHMAIL</span>
+          <img
+            src={@dashboard_path <> "/assets/" <> SquatchMail.Web.AssetController.asset_path(:logo)}
+            alt=""
+            class="sq-sidebar__logo-img"
+          />
+          <span class="sq-sidebar__wordmark">SQUATCH<span class="sq-sidebar__wordmark-accent">MAIL</span></span>
         </a>
 
         <nav class="sq-nav">

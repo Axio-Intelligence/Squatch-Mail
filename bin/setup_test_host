@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+#
+# Scaffolds a throwaway Phoenix host application in test_host/ (gitignored)
+# that pulls SquatchMail in as a path dependency and runs its igniter
+# installer — the exact steps a real host app would follow, which makes this
+# both the contributor dev environment and a live smoke test of
+# `mix squatch_mail.install` against a stock `mix phx.new` app.
+#
+# Usage, from the repo root:
+#
+#     bin/setup_test_host
+#
+# Requires Elixir (for the generator + installer). With Docker installed,
+# that's it — the app and Postgres both run via the generated
+# docker-compose.yml. Without Docker, you also need a reachable Postgres;
+# connection settings honor the standard PG* environment variables
+# (PGUSER, PGPASSWORD, PGHOST, PGPORT), same as the library's own
+# config/dev.exs.
+#
+# To start over: rm -rf test_host && bin/setup_test_host
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if [ -d test_host ]; then
+  echo "test_host/ already exists — nothing to do." >&2
+  echo "To re-scaffold from scratch: rm -rf test_host && bin/setup_test_host" >&2
+  exit 1
+fi
+
+echo "==> Installing the Phoenix project generator (phx_new archive)"
+mix archive.install hex phx_new --force
+
+# (`mix igniter.new` would fuse the next three steps, but it refuses to run
+# from inside an existing Mix project, which is exactly where this script
+# lives — so we compose them by hand.)
+echo "==> Generating test_host/"
+mix phx.new test_host --install
+
+cd test_host
+
+echo "==> Adding squatch_mail as a path dependency"
+perl -0777 -pi -e 's/(defp deps do\s*\n\s*\[\n)/$1      {:squatch_mail, path: ".."},\n      {:igniter, "~> 0.5", only: [:dev]},\n/' mix.exs
+mix deps.get
+
+echo "==> Running the SquatchMail installer (mix squatch_mail.install)"
+mix squatch_mail.install --yes
+
+# phx.new hardcodes postgres/postgres credentials; rewrite them to honor the
+# standard PG* env vars so the generated app connects wherever the library's
+# own dev/test config already does (Homebrew Postgres, Docker, CI, ...).
+echo "==> Pointing test_host's Repo config at the PG* environment variables"
+perl -pi -e '
+  s/username: "postgres"/username: System.get_env("PGUSER", System.get_env("USER", "postgres"))/;
+  s/password: "postgres"/password: System.get_env("PGPASSWORD", "postgres")/;
+  s/hostname: "localhost"/hostname: System.get_env("PGHOST", "localhost")/;
+' config/dev.exs config/test.exs
+
+# Listen on all interfaces so the endpoint is reachable from outside the app
+# container; harmless when running directly on the host.
+perl -pi -e 's/ip: \{127, 0, 0, 1\}/ip: {0, 0, 0, 0}/' config/dev.exs
+
+# A stock phx.new app has no auth pipeline, so the installer mounts the
+# dashboard behind :browser and SquatchMail's Auth plug denies access by
+# default. Open it up in dev only — a real host would wire an on_mount hook
+# or :basic_auth instead (see SquatchMail.Web.Router's docs).
+cat >> config/dev.exs <<'EOF'
+
+# The test host has no auth pipeline; open the SquatchMail dashboard in dev.
+config :squatch_mail, allow_unauthenticated: true
+EOF
+
+echo "==> Writing Dockerfile and docker-compose.yml"
+
+# Latest stable toolchain as of July 2026: Elixir 1.20.2 / Erlang OTP 29.0.3
+# (and postgres:18.4 in the compose file below). When bumping, pick a tag
+# that exists at https://hub.docker.com/r/hexpm/elixir/tags.
+cat > Dockerfile <<'EOF'
+# Dev container for the throwaway SquatchMail test host. The image is only
+# the toolchain — the code (this app plus the squatch_mail checkout it
+# path-depends on) is bind-mounted by docker-compose.yml, so library edits
+# on the host are picked up on recompile without rebuilding the image.
+FROM hexpm/elixir:1.20.2-erlang-29.0.3-debian-trixie-20260623
+
+# build-essential: NIF/port compilation; inotify-tools: Phoenix live reload.
+RUN apt-get update -y && \
+    apt-get install -y build-essential git inotify-tools && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN mix local.hex --force && mix local.rebar --force
+
+WORKDIR /workspace/test_host
+
+# `mix setup` = deps.get + ecto.setup + assets. Re-running on every boot is
+# idempotent and keeps the container self-healing after volume wipes.
+CMD ["sh", "-c", "mix setup && mix phx.server"]
+EOF
+
+cat > docker-compose.yml <<'EOF'
+services:
+  app:
+    build: .
+    ports:
+      - "4000:4000"
+    environment:
+      # test_host's config reads the standard PG* vars (see the perl patch
+      # in bin/setup_test_host).
+      PGHOST: db
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    volumes:
+      # Mount the whole squatch_mail checkout, not just test_host — mix.exs
+      # path-depends on `..`.
+      - ..:/workspace
+      # Keep the container's (Linux) build artifacts out of the host's
+      # _build and deps.
+      - app_build:/workspace/test_host/_build
+      - app_deps:/workspace/test_host/deps
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:18.4
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      # Published on 5433 so it never collides with a Postgres already on
+      # the host. The library's own test suite / mix dev can reuse it:
+      #   PGPORT=5433 PGUSER=postgres PGPASSWORD=postgres mix test
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      # postgres:18+ images moved the volume from /var/lib/postgresql/data
+      # to /var/lib/postgresql (PGDATA now lives under a per-major subdir).
+      - pg_data:/var/lib/postgresql
+
+volumes:
+  app_build:
+  app_deps:
+  pg_data:
+EOF
+
+if docker compose version >/dev/null 2>&1; then
+  cat <<'EOF'
+
+==> Done. The throwaway host app lives in test_host/ (gitignored).
+
+Run it (app + Postgres 18, no host database needed):
+
+    cd test_host
+    docker compose up --build
+
+  * http://localhost:4000/squatch      - the SquatchMail dashboard
+  * http://localhost:4000/dev/mailbox  - Swoosh's local mailbox preview
+
+Send an email through the host mailer and watch it appear in both:
+
+    docker compose exec app iex -S mix
+    iex> import Swoosh.Email
+    iex> new(to: "sasquatch@example.com", from: "ranger@example.com",
+    ...>   subject: "hello", text_body: "hi") |> TestHost.Mailer.deliver()
+
+Library code changes are picked up on recompile (it's a path dependency
+bind-mounted into the container) — just restart the app service.
+
+The compose Postgres is also handy for the library itself, no local
+install required:
+
+    docker compose -f test_host/docker-compose.yml up -d db   # from repo root
+    PGPORT=5433 PGUSER=postgres PGPASSWORD=postgres mix test
+    PGPORT=5433 PGUSER=postgres PGPASSWORD=postgres mix dev
+EOF
+else
+  echo "==> Docker not found — creating and migrating the database on the host instead"
+  if ! mix ecto.setup; then
+    cat >&2 <<'EOF'
+
+Database setup failed. Check that Postgres is running and that the PG*
+environment variables (PGUSER, PGPASSWORD, PGHOST, PGPORT) point at it,
+then finish up manually:
+
+    cd test_host && mix ecto.setup
+
+EOF
+    exit 1
+  fi
+
+  cat <<'EOF'
+
+==> Done. The throwaway host app lives in test_host/ (gitignored).
+
+Try it out:
+
+    cd test_host
+    mix phx.server
+
+  * http://localhost:4000/squatch      - the SquatchMail dashboard
+  * http://localhost:4000/dev/mailbox  - Swoosh's local mailbox preview
+
+Send an email through the host mailer and watch it appear in both:
+
+    cd test_host
+    iex -S mix phx.server
+    iex> import Swoosh.Email
+    iex> new(to: "sasquatch@example.com", from: "ranger@example.com",
+    ...>   subject: "hello", text_body: "hi") |> TestHost.Mailer.deliver()
+
+Library code changes are picked up on recompile (it's a path dependency) —
+just restart or `recompile` in IEx.
+EOF
+fi

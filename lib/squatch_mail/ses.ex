@@ -10,7 +10,7 @@ defmodule SquatchMail.SES do
 
   It provides four capabilities that back the dashboard's "Connect SES" flow:
 
-    * **One-click provisioning** (`provision/2`) — idempotently create (or reuse)
+    * **One-click provisioning** (`provision/1`, `provision/3`) — idempotently create (or reuse)
       a configuration set, an SNS topic, an HTTPS subscription to our webhook
       URL, and a configuration-set event destination pointing at that topic.
     * **Quota sync** (`sync_quota/1`, `ensure_quota_synced/1`) — read the SES
@@ -179,7 +179,8 @@ defmodule SquatchMail.SES do
   Idempotently provisions SES event publishing for `source`.
 
   `webhook_url` must be the full, publicly-reachable HTTPS URL of SquatchMail's
-  SNS webhook endpoint — typically `https://<host>/webhooks/ses/<webhook_token>`.
+  SNS webhook endpoint — typically
+  `https://<host>/<dashboard_path>/webhooks/sns/<webhook_token>`.
   This module does **not** compute the host's public base URL (there is no
   router/endpoint at this layer); the dashboard/router layer is responsible for
   building it and passing it in.

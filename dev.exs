@@ -1,11 +1,20 @@
 # Development preview server for SquatchMail.
 #
 # Boots a minimal Phoenix endpoint with the SquatchMail dashboard mounted at
-# /squatch, backed by a dev Postgres database and Swoosh's local adapter.
+# /squatch, backed by a dev Postgres database (`squatch_mail_dev`, created and
+# migrated automatically at boot) and Swoosh's local adapter.
 #
 # Usage:
 #
 #     mix dev
+#
+# or, to also get an IEx shell for sending test emails through the capture
+# pipeline:
+#
+#     iex -S mix dev
+#     iex> import Swoosh.Email
+#     iex> new(to: "sasquatch@example.com", from: "ranger@example.com",
+#     ...>   subject: "hello", text_body: "hi") |> SquatchMailDev.Mailer.deliver()
 
 Application.put_env(:squatch_mail_dev, SquatchMailDev.Endpoint,
   adapter: Bandit.PhoenixAdapter,
@@ -18,6 +27,21 @@ Application.put_env(:squatch_mail_dev, SquatchMailDev.Endpoint,
 )
 
 Application.put_env(:swoosh, :api_client, false)
+
+# The repo the whole preview runs on. config/dev.exs points
+# `:squatch_mail, :repo` here; the module itself can't live in lib/ because
+# the library must never ship a repo — hosts always bring their own.
+Application.put_env(:squatch_mail_dev, SquatchMailDev.Repo,
+  username: System.get_env("PGUSER", System.get_env("USER", "postgres")),
+  password: System.get_env("PGPASSWORD", ""),
+  hostname: System.get_env("PGHOST", "localhost"),
+  port: String.to_integer(System.get_env("PGPORT", "5432")),
+  database: "squatch_mail_dev"
+)
+
+defmodule SquatchMailDev.Repo do
+  use Ecto.Repo, otp_app: :squatch_mail_dev, adapter: Ecto.Adapters.Postgres
+end
 
 defmodule SquatchMailDev.Mailer do
   use Swoosh.Mailer, otp_app: :squatch_mail_dev
@@ -129,13 +153,28 @@ defmodule SquatchMailDev.Endpoint do
   plug SquatchMailDev.Router
 end
 
+# Create the dev database if it doesn't exist yet ({:error, :already_up} on
+# every boot after the first).
+case SquatchMailDev.Repo.__adapter__().storage_up(SquatchMailDev.Repo.config()) do
+  :ok -> IO.puts("Created database squatch_mail_dev")
+  {:error, :already_up} -> :ok
+  {:error, reason} -> raise "could not create squatch_mail_dev: #{inspect(reason)}"
+end
+
 children = [
+  SquatchMailDev.Repo,
   {Phoenix.PubSub, name: SquatchMailDev.PubSub},
   SquatchMailDev.Endpoint
 ]
 
 {:ok, _pid} =
   Supervisor.start_link(children, strategy: :one_for_one, name: SquatchMailDev.Supervisor)
+
+# Bring the schema up to date on every boot. This is the same versioned
+# migration a host app would generate (see SquatchMail.Migrations); running
+# it through Ecto.Migrator is idempotent, so already-applied versions are
+# skipped.
+Ecto.Migrator.run(SquatchMailDev.Repo, "priv/repo/migrations", :up, all: true)
 
 IO.puts("SquatchMail dev preview running at http://localhost:4000")
 

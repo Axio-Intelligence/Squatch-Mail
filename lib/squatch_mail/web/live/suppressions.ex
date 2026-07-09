@@ -6,16 +6,14 @@ defmodule SquatchMail.Web.Live.Suppressions do
   entries), lets an operator add a manual suppression, remove any row, and
   release expired soft bounces in bulk.
 
-  ## Bounce/Complaint browsing via query params
+  ## Reason filter via query params
 
-  There are no dedicated `/bounces` or `/complaints` routes yet, so this page
-  doubles as the browsing surface for those categories. `handle_params/3`
-  reads a `?reason=` query param (`hard_bounce`, `soft_bounce`, `complaint`,
-  or `manual`) and pre-applies it as the reason filter. When (later) the
-  sidebar's "Bounces"/"Complaints" nav items are pointed at
-  `<dashboard_path>/suppressions?reason=hard_bounce` and `?reason=complaint`,
-  this page renders them correctly. (Changing those nav hrefs lives in
-  `layouts.ex`, which is out of this file's territory.)
+  `handle_params/3` reads a `?reason=` query param (`hard_bounce`,
+  `soft_bounce`, `complaint`, or `manual`) and pre-applies it as the reason
+  filter, so links can deep-link into a single category. Note this filters
+  *suppressions* — the sidebar's dedicated Bounces/Complaints pages
+  (`/bounces`, `/complaints`, served by `SquatchMail.Web.Live.TrailLog`) list
+  the bounced/complained *emails* instead.
   """
 
   use Phoenix.LiveView

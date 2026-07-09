@@ -201,6 +201,209 @@ defmodule SquatchMail.Web.TrailLogLiveTest do
     assert wait_until(fn -> render(view) =~ email.public_id end)
   end
 
+  describe "archive pages (/sightings, /bounces, /complaints)" do
+    test "/sightings lists emails of every status with its own title and empty state", %{
+      conn: conn
+    } do
+      {:ok, _view, html} = live(conn, "/squatch/sightings")
+      assert html =~ "Sightings"
+      assert html =~ "No sightings on record."
+
+      {:ok, delivered} =
+        Tracker.record_email(%{
+          from_email: "a@example.com",
+          subject: "Delivered",
+          status: "delivered",
+          recipients: [%{kind: "to", address: "one@example.com"}]
+        })
+
+      {:ok, bounced} =
+        Tracker.record_email(%{
+          from_email: "a@example.com",
+          subject: "Bounced",
+          status: "bounced",
+          recipients: [%{kind: "to", address: "two@example.com"}]
+        })
+
+      {:ok, _view, html} = live(conn, "/squatch/sightings")
+      assert html =~ delivered.public_id
+      assert html =~ bounced.public_id
+    end
+
+    test "/bounces shows only bounced emails and hides the status select", %{conn: conn} do
+      {:ok, delivered} =
+        Tracker.record_email(%{
+          from_email: "a@example.com",
+          subject: "Delivered",
+          status: "delivered",
+          recipients: [%{kind: "to", address: "one@example.com"}]
+        })
+
+      {:ok, bounced} =
+        Tracker.record_email(%{
+          from_email: "a@example.com",
+          subject: "Bounced",
+          status: "bounced",
+          recipients: [%{kind: "to", address: "two@example.com"}]
+        })
+
+      {:ok, view, html} = live(conn, "/squatch/bounces")
+
+      assert html =~ bounced.public_id
+      refute html =~ delivered.public_id
+      refute has_element?(view, "#sq-trail-log-status")
+      assert html =~ "status=bounced"
+    end
+
+    test "a hand-typed ?status= param cannot unlock the bounces filter", %{conn: conn} do
+      {:ok, delivered} =
+        Tracker.record_email(%{
+          from_email: "a@example.com",
+          subject: "Delivered",
+          status: "delivered",
+          recipients: [%{kind: "to", address: "one@example.com"}]
+        })
+
+      {:ok, _view, html} = live(conn, "/squatch/bounces?status=delivered")
+      refute html =~ delivered.public_id
+    end
+
+    test "searching on /bounces patches within the bounces path", %{conn: conn} do
+      {:ok, match} =
+        Tracker.record_email(%{
+          from_email: "a@example.com",
+          subject: "Ridge bounce",
+          status: "bounced",
+          recipients: [%{kind: "to", address: "ranger@example.com"}]
+        })
+
+      {:ok, other} =
+        Tracker.record_email(%{
+          from_email: "a@example.com",
+          subject: "Other bounce",
+          status: "bounced",
+          recipients: [%{kind: "to", address: "someone@example.com"}]
+        })
+
+      {:ok, view, _html} = live(conn, "/squatch/bounces")
+
+      html =
+        view
+        |> element("#sq-trail-log-search")
+        |> render_change(%{"q" => "ridge"})
+
+      assert html =~ match.public_id
+      refute html =~ other.public_id
+      assert_patch(view, "/squatch/bounces?q=ridge")
+    end
+
+    test "clicking a row on /bounces builds a back link to /bounces", %{conn: conn} do
+      {:ok, email} =
+        Tracker.record_email(%{
+          from_email: "a@example.com",
+          subject: "Bounced",
+          status: "bounced",
+          recipients: [%{kind: "to", address: "two@example.com"}]
+        })
+
+      {:ok, view, _html} = live(conn, "/squatch/bounces")
+
+      {:error, {:live_redirect, %{to: to}}} =
+        view
+        |> element("tr[phx-value-public_id='#{email.public_id}']")
+        |> render_click()
+
+      assert to =~ "/squatch/sightings/#{email.public_id}"
+      assert to =~ "back=%2Fbounces"
+    end
+
+    test "/bounces shows the bounce reason column instead of engagement", %{conn: conn} do
+      {:ok, email} =
+        Tracker.record_email(%{
+          from_email: "a@example.com",
+          subject: "Bounced with reason",
+          status: "bounced",
+          message_id: "msg-bounce-reason-#{System.unique_integer([:positive])}",
+          recipients: [%{kind: "to", address: "gone@example.com"}]
+        })
+
+      {:ok, _} =
+        Tracker.record_event(%{
+          event_type: "bounce",
+          message_id: email.message_id,
+          recipient: "gone@example.com",
+          payload: %{
+            "bounce" => %{
+              "bounceType" => "Permanent",
+              "bounceSubType" => "NoEmail",
+              "bouncedRecipients" => [
+                %{
+                  "emailAddress" => "gone@example.com",
+                  "diagnosticCode" => "smtp; 550 5.1.1 user unknown"
+                }
+              ]
+            }
+          }
+        })
+
+      {:ok, _view, html} = live(conn, "/squatch/bounces")
+
+      assert html =~ "<th>Reason</th>"
+      refute html =~ "<th>Engagement</th>"
+      assert html =~ "Permanent · NoEmail"
+      assert html =~ "smtp; 550 5.1.1 user unknown"
+    end
+
+    test "/complaints shows the ISP feedback type when SES provides one", %{conn: conn} do
+      {:ok, email} =
+        Tracker.record_email(%{
+          from_email: "a@example.com",
+          subject: "Complained with feedback",
+          status: "complained",
+          message_id: "msg-complaint-reason-#{System.unique_integer([:positive])}",
+          recipients: [%{kind: "to", address: "angry@example.com"}]
+        })
+
+      {:ok, _} =
+        Tracker.record_event(%{
+          event_type: "complaint",
+          message_id: email.message_id,
+          recipient: "angry@example.com",
+          payload: %{"complaint" => %{"complaintFeedbackType" => "abuse"}}
+        })
+
+      {:ok, _view, html} = live(conn, "/squatch/complaints")
+
+      assert html =~ "<th>Feedback</th>"
+      assert html =~ "abuse"
+    end
+
+    test "/complaints shows only complained emails, with its own empty state", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/squatch/complaints")
+      assert html =~ "No complaints. The woods are peaceful."
+
+      {:ok, complained} =
+        Tracker.record_email(%{
+          from_email: "a@example.com",
+          subject: "Complained",
+          status: "complained",
+          recipients: [%{kind: "to", address: "one@example.com"}]
+        })
+
+      {:ok, bounced} =
+        Tracker.record_email(%{
+          from_email: "a@example.com",
+          subject: "Bounced",
+          status: "bounced",
+          recipients: [%{kind: "to", address: "two@example.com"}]
+        })
+
+      {:ok, _view, html} = live(conn, "/squatch/complaints")
+      assert html =~ complained.public_id
+      refute html =~ bounced.public_id
+    end
+  end
+
   defp wait_until(fun, attempts \\ 20) do
     cond do
       fun.() ->

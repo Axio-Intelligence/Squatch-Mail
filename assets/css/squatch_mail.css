@@ -1,5 +1,11 @@
 /*
- * SquatchMail dashboard design system — "Field Research Station".
+ * SquatchMail dashboard design system — "daytime at the trailhead".
+ *
+ * Theme tokens mirror the landing page's main `@theme` palette
+ * (landing-page/src/styles/global.css): warm cream trail-map paper
+ * surfaces, deep forest ink, pine-green signal accent, bark brown for
+ * field-journal microlabels, Bebas Neue display type and Space Mono for
+ * everything else. Keep the two files in sync when the palette moves.
  *
  * Hand-written vanilla CSS (no Tailwind). The dashboard is embedded inside
  * arbitrary host applications, many of which already run their own Tailwind
@@ -8,44 +14,55 @@
  * scoped, hand-rolled stylesheet under a single `.sq-root` namespace is
  * easier to keep collision-free in a host page than a utility framework.
  *
+ * The shipped bundle is this file with `assets/css/fonts.css` (base64
+ * woff2 @font-face rules) prepended by `mix squatch_mail.copy_css`, so the
+ * bundle stays a single self-contained request.
+ *
  * Every token from DESIGN.md is expressed as a `--sq-*` custom property on
  * `.sq-root` so the whole system stays overridable by a host that wants to
  * retheme without forking this file.
  */
 
 .sq-root {
-  /* Surfaces */
-  --sq-bg-base: #0f1509;
-  --sq-bg-surface: #161b13;
-  --sq-bg-raised: #212f0c;
-  --sq-bg-highlight: #2d3329;
+  /* Surfaces — daylight paper, lightest cream to pressed tan */
+  --sq-bg-base: #f3efe0;
+  --sq-bg-surface: #faf7ec;
+  --sq-bg-raised: #e9e3cc;
+  --sq-bg-highlight: #ded6ba;
 
   /* Text */
-  --sq-text: #dde2e4;
-  --sq-text-muted: #84907f;
+  --sq-text: #22301b;
+  --sq-text-muted: #67705a;
+  --sq-bark: #7d5f3c;
 
   /* Accent + signal colors */
-  --sq-accent: #e2ffcc;
-  --sq-accent-dim: #64754b;
-  --sq-ember: #dc8c46;
-  --sq-danger: #e0654f;
-  --sq-border: #2a3324;
+  --sq-accent: #3e661f;
+  --sq-chartreuse: #e2ffcc;
+  --sq-accent-dim: #a39f7d;
+  --sq-ember: #c06b2a;
+  --sq-danger: #b23c2a;
+  --sq-border: #ddd5b8;
+
+  /* Primary button face — deep pine with radio-signal chartreuse text,
+     the landing page's `--btn-bg`/`--btn-fg` pair */
+  --sq-btn-bg: #2c4419;
+  --sq-btn-fg: #e2ffcc;
 
   /* Status badge colors */
   --sq-status-sent: var(--sq-text-muted);
-  --sq-status-delivered: #9ecf7a;
+  --sq-status-delivered: #4e7d2e;
   --sq-status-opened: var(--sq-accent);
-  --sq-status-clicked: #7adfcf;
+  --sq-status-clicked: #257a67;
   --sq-status-bounced: var(--sq-danger);
-  --sq-status-complained: #e0654f;
+  --sq-status-complained: var(--sq-danger);
   --sq-status-rejected: var(--sq-danger);
   --sq-status-delayed: var(--sq-ember);
   --sq-status-suppressed: var(--sq-text-muted);
 
-  /* Typography */
-  --sq-font-display: Georgia, "Times New Roman", serif;
-  --sq-font-sans: ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
-  --sq-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* Typography — embedded Bebas Neue + Space Mono (see fonts.css) */
+  --sq-font-display: "Bebas Neue", "Arial Narrow", ui-sans-serif, sans-serif;
+  --sq-font-mono: "Space Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sq-font-sans: var(--sq-font-mono);
 
   /* Radii */
   --sq-radius: 6px;
@@ -55,13 +72,13 @@
   /* Shadows (used sparingly — depth comes from surface levels, not shadow) */
   --sq-shadow-modal: rgba(0, 0, 0, 0.2) 0 2px 5px;
 
-  color-scheme: dark;
+  color-scheme: light;
   background: var(--sq-bg-base);
   color: var(--sq-text);
-  font-family: var(--sq-font-sans);
+  font-family: var(--sq-font-mono);
   font-size: 14px;
   line-height: 1.5;
-  letter-spacing: 0.02em;
+  letter-spacing: -0.01em;
   position: relative;
   min-height: 100vh;
 }
@@ -74,40 +91,55 @@
   margin: 0;
 }
 
-.sq-root a {
+.sq-root ::selection {
+  background: var(--sq-accent);
+  color: var(--sq-chartreuse);
+}
+
+/* `:where()` keeps these element resets at zero specificity so component
+   classes below (e.g. `.sq-btn--primary`'s dark-on-chartreuse text) can
+   override them without selector escalation. */
+.sq-root :where(a) {
   color: var(--sq-accent);
   text-decoration: none;
 }
 
-.sq-root a:hover {
+.sq-root :where(a):hover {
   text-decoration: underline;
 }
 
-.sq-root button {
+.sq-root :where(button) {
   font-family: inherit;
   color: inherit;
 }
 
-/* Topographic background texture — San Rita map motif, 2% opacity contour
-   lines rendered as an inline SVG data-URI so no asset request is needed. */
+/* Topographic background texture — the landing page's contour-line motif:
+   pine-green contour lines on trail-map paper. Inline SVG data-URI so no
+   asset request is needed. */
 .sq-root {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='400' viewBox='0 0 400 400'%3E%3Cg fill='none' stroke='%23e2ffcc' stroke-width='1' opacity='0.02'%3E%3Cpath d='M20,200 Q100,80 200,120 T380,180'/%3E%3Cpath d='M0,260 Q120,160 220,200 T400,240'/%3E%3Cpath d='M-20,120 Q80,20 200,40 T420,80'/%3E%3Cpath d='M0,340 Q140,260 240,300 T400,320'/%3E%3Cpath d='M40,60 Q140,140 260,90 T400,60'/%3E%3C/g%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='520' height='520' viewBox='0 0 520 520'%3E%3Cg fill='none' stroke='%233d521e' stroke-opacity='0.10' stroke-width='1'%3E%3Cpath d='M60 140c40-60 150-70 200-30s30 110-20 140-140 20-180-20-30-60 0-90z'/%3E%3Cpath d='M80 150c35-48 125-58 165-25s25 90-17 115-115 17-148-16-25-50 0-74z'/%3E%3Cpath d='M102 162c28-37 98-45 129-20s20 70-13 90-90 13-116-12-20-40 0-58z'/%3E%3Cpath d='M126 174c20-26 70-32 92-14s14 50-9 64-64 9-83-9-14-28 0-41z'/%3E%3Cpath d='M330 380c50-40 130-20 150 30s-20 100-80 100-110-30-110-70 15-40 40-60z'/%3E%3Cpath d='M348 392c40-32 104-16 120 24s-16 80-64 80-88-24-88-56 12-32 32-48z'/%3E%3Cpath d='M368 406c30-24 78-12 90 18s-12 60-48 60-66-18-66-42 9-24 24-36z'/%3E%3Cpath d='M-40 420c30-50 110-60 150-25s25 85-15 110-105 15-135-15-25-45 0-70z'/%3E%3Cpath d='M-20 432c25-40 88-48 120-20s20 68-12 88-84 12-108-12-20-36 0-56z'/%3E%3Cpath d='M420 40c35-25 85-10 95 25s-15 65-55 65-70-20-70-45 10-30 30-45z'/%3E%3Cpath d='M432 52c27-19 65-8 73 19s-11 50-42 50-54-15-54-35 8-23 23-34z'/%3E%3C/g%3E%3C/svg%3E");
   background-repeat: repeat;
-  background-size: 400px 400px;
+  background-size: 520px 520px;
 }
 
-/* Microlabels: `// TRAIL LOG`-style all-caps mono section labels. */
+/* Microlabels: `// TRAIL LOG`-style all-caps mono field-journal annotations,
+   burned into bark. */
 .sq-microlabel {
   font-family: var(--sq-font-mono);
   font-size: 11px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--sq-text-muted);
+  color: var(--sq-bark);
 }
 
 .sq-mono {
   font-family: var(--sq-font-mono);
   letter-spacing: -0.01em;
+}
+
+/* The opposite foot — landing page `Footprint.astro`'s `mirrored` prop. */
+.sq-footprint--mirrored {
+  transform: scaleX(-1);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -141,17 +173,32 @@
   border-bottom: 1px solid var(--sq-border);
 }
 
+.sq-sidebar__logo:hover {
+  text-decoration: none;
+}
+
+.sq-sidebar__logo-img {
+  width: 40px;
+  height: 34px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
 .sq-sidebar__logo .sq-footprint {
   color: var(--sq-accent);
   flex: 0 0 auto;
 }
 
 .sq-sidebar__wordmark {
-  font-family: var(--sq-font-mono);
-  font-weight: 700;
-  font-size: 14px;
-  letter-spacing: 0.04em;
+  font-family: var(--sq-font-display);
+  font-weight: 400;
+  font-size: 21px;
+  letter-spacing: 0.05em;
   color: var(--sq-text);
+}
+
+.sq-sidebar__wordmark-accent {
+  color: var(--sq-accent);
 }
 
 .sq-nav {
@@ -231,9 +278,10 @@
 .sq-page-title {
   font-family: var(--sq-font-display);
   font-weight: 400;
-  font-size: 32px;
+  font-size: 36px;
   line-height: 0.95;
-  letter-spacing: 0;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
   color: var(--sq-text);
 }
 
@@ -249,10 +297,10 @@
   align-items: center;
   gap: 6px;
   font-family: var(--sq-font-mono);
-  font-size: 11px;
-  letter-spacing: 0.04em;
+  font-size: 10px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--sq-text-muted);
+  color: var(--sq-accent);
 }
 
 .sq-live-indicator__dot {
@@ -260,19 +308,19 @@
   height: 8px;
   border-radius: 50%;
   background: var(--sq-accent);
-  box-shadow: 0 0 0 0 rgba(226, 255, 204, 0.6);
+  box-shadow: 0 0 0 0 rgba(62, 102, 31, 0.55);
   animation: sq-pulse 2s ease-out infinite;
 }
 
 @keyframes sq-pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(226, 255, 204, 0.5);
+    box-shadow: 0 0 0 0 rgba(62, 102, 31, 0.5);
   }
   70% {
-    box-shadow: 0 0 0 6px rgba(226, 255, 204, 0);
+    box-shadow: 0 0 0 6px rgba(62, 102, 31, 0);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(226, 255, 204, 0);
+    box-shadow: 0 0 0 0 rgba(62, 102, 31, 0);
   }
 }
 
@@ -313,9 +361,9 @@
 .sq-stat-card__label {
   font-family: var(--sq-font-mono);
   font-size: 11px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--sq-text-muted);
+  color: var(--sq-bark);
 }
 
 .sq-stat-card__value {
@@ -366,23 +414,25 @@
   gap: 6px;
   cursor: pointer;
   border: none;
-  transition: filter 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+  transition: filter 0.15s ease, background-color 0.15s ease, border-color 0.15s ease,
+    color 0.15s ease;
   white-space: nowrap;
 }
 
 .sq-btn--primary {
-  background: var(--sq-accent);
-  color: #0f1509;
+  background: var(--sq-btn-bg);
+  color: var(--sq-btn-fg);
   border-radius: var(--sq-radius-pill);
   font-family: var(--sq-font-mono);
+  font-weight: 700;
   text-transform: uppercase;
   font-size: 12px;
-  letter-spacing: 0.04em;
-  padding: 8px 16px;
+  letter-spacing: 0.08em;
+  padding: 8px 18px;
 }
 
 .sq-btn--primary:hover {
-  filter: brightness(1.06);
+  filter: brightness(1.1);
 }
 
 .sq-btn--ghost {
@@ -390,12 +440,16 @@
   border: 1px solid var(--sq-accent-dim);
   color: var(--sq-text);
   border-radius: var(--sq-radius);
-  font-size: 13px;
+  font-family: var(--sq-font-mono);
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.08em;
   padding: 7px 14px;
 }
 
 .sq-btn--ghost:hover {
-  background: var(--sq-bg-raised);
+  border-color: var(--sq-accent);
+  color: var(--sq-accent);
 }
 
 .sq-btn--danger {
@@ -408,7 +462,7 @@
 }
 
 .sq-btn--danger:hover {
-  background: rgba(224, 101, 79, 0.12);
+  background: rgba(178, 60, 42, 0.1);
 }
 
 .sq-btn--danger-filled {
@@ -453,7 +507,7 @@
 .sq-badge--clicked { color: var(--sq-status-clicked); }
 .sq-badge--bounced { color: var(--sq-status-bounced); }
 .sq-badge--complained {
-  color: #0f1509;
+  color: var(--sq-bg-surface);
   background: var(--sq-status-complained);
   border-color: var(--sq-status-complained);
 }
@@ -488,7 +542,7 @@
 .sq-select:focus {
   outline: none;
   border-color: var(--sq-accent);
-  box-shadow: 0 0 0 3px rgba(226, 255, 204, 0.15);
+  box-shadow: 0 0 0 3px rgba(62, 102, 31, 0.15);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -513,8 +567,8 @@
   font-family: var(--sq-font-mono);
   font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--sq-text-muted);
+  letter-spacing: 0.14em;
+  color: var(--sq-bark);
   font-weight: 400;
   padding: 10px 16px;
   border-bottom: 1px solid var(--sq-border);
@@ -571,6 +625,28 @@
   white-space: nowrap;
 }
 
+/* Bounce/complaint reason cell: classification line + muted diagnostic. */
+.sq-table__reason {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 360px;
+}
+
+.sq-table__reason-primary {
+  font-size: 13px;
+  color: var(--sq-text);
+}
+
+.sq-table__reason-detail {
+  font-family: var(--sq-font-mono);
+  font-size: 12px;
+  color: var(--sq-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Stat cards / side sheet (inspector)                                    */
 /* ---------------------------------------------------------------------- */
@@ -609,9 +685,9 @@
 .sq-sheet__title {
   font-family: var(--sq-font-mono);
   font-size: 12px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--sq-text-muted);
+  color: var(--sq-bark);
 }
 
 .sq-sheet__body {
@@ -716,13 +792,16 @@
 }
 
 .sq-empty-state .sq-footprint {
-  color: var(--sq-accent-dim);
-  opacity: 0.7;
+  /* footprints pressed in mud — bark brown, like the landing page bullets */
+  color: var(--sq-bark);
+  opacity: 0.55;
 }
 
 .sq-empty-state__title {
   font-family: var(--sq-font-display);
-  font-size: 20px;
+  font-size: 24px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
   color: var(--sq-text);
 }
 
@@ -742,17 +821,18 @@
 }
 
 .sq-spinner .sq-footprint {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 19px;
   color: var(--sq-accent);
   opacity: 0;
   animation: sq-footstep 1.4s ease-in-out infinite;
 }
 
+/* Even steps are the mirrored foot, dropped slightly — a walking gait. */
 .sq-spinner .sq-footprint:nth-child(1) { animation-delay: 0s; }
-.sq-spinner .sq-footprint:nth-child(2) { animation-delay: 0.2s; transform: translateY(3px); }
+.sq-spinner .sq-footprint:nth-child(2) { animation-delay: 0.2s; transform: translateY(3px) scaleX(-1); }
 .sq-spinner .sq-footprint:nth-child(3) { animation-delay: 0.4s; }
-.sq-spinner .sq-footprint:nth-child(4) { animation-delay: 0.6s; transform: translateY(3px); }
+.sq-spinner .sq-footprint:nth-child(4) { animation-delay: 0.6s; transform: translateY(3px) scaleX(-1); }
 
 @keyframes sq-footstep {
   0%, 100% { opacity: 0; }
@@ -770,7 +850,7 @@
   font-family: var(--sq-font-mono);
   font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.14em;
   color: var(--sq-text-muted);
 }
 
@@ -859,7 +939,9 @@
 
 .sq-refusal__title {
   font-family: var(--sq-font-display);
-  font-size: 24px;
+  font-size: 26px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
 .sq-refusal pre {

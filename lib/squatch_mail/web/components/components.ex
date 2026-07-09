@@ -89,7 +89,7 @@ defmodule SquatchMail.Web.Components do
   def empty_state(assigns) do
     ~H"""
     <div class="sq-empty-state">
-      <Icons.footprint class="sq-footprint" style="width: 56px; height: 56px;" />
+      <Icons.footprint class="sq-footprint" style="width: 44px; height: 70px;" />
       <span class="sq-empty-state__title"><%= @title %></span>
       <p class="sq-empty-state__copy"><%= @copy %></p>
     </div>

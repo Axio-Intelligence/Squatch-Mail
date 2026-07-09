@@ -1,10 +1,11 @@
 defmodule SquatchMail.Web.AssetController do
   @moduledoc """
-  Serves SquatchMail's self-contained CSS/JS bundle with content-hashed,
-  immutable-cached paths.
+  Serves SquatchMail's self-contained CSS/JS bundle (plus the logo PNG) with
+  content-hashed, immutable-cached paths.
 
   This follows the same pattern as Phoenix LiveDashboard's and Oban Web's
-  asset plugs: the built `priv/static/squatch_mail.{css,js}` files are read
+  asset plugs: the built `priv/static/squatch_mail.{css,js}` files (and the
+  committed `squatch_mail_logo.png`) are read
   once at compile time into module attributes, an MD5 hash of each is
   computed as a compile-time constant, and that hash is embedded in the
   asset's URL (`/assets/css-<md5>`, `/assets/js-<md5>`). Because the path
@@ -44,12 +45,14 @@ defmodule SquatchMail.Web.AssetController do
 
   css_path = Path.join(@static_dir, "squatch_mail.css")
   js_path = Path.join(@static_dir, "squatch_mail.js")
+  logo_path = Path.join(@static_dir, "squatch_mail_logo.png")
 
   # `@external_resource` still applies even when the file doesn't exist yet:
   # Elixir tracks the path and recompiles this module the moment a file
   # appears there (e.g. right after `mix assets.build` runs).
   @external_resource css_path
   @external_resource js_path
+  @external_resource logo_path
 
   @css (case File.read(css_path) do
           {:ok, contents} -> contents
@@ -61,28 +64,39 @@ defmodule SquatchMail.Web.AssetController do
          {:error, _reason} -> nil
        end)
 
+  # The sidebar's bigfoot-mascot mark. Unlike the CSS/JS this is not a build
+  # artifact — it's a committed static file — but it's served through the
+  # same hashed, immutable-cached mechanism.
+  @logo (case File.read(logo_path) do
+           {:ok, contents} -> contents
+           {:error, _reason} -> nil
+         end)
+
   @hashes %{
     css: @css && Base.encode16(:crypto.hash(:md5, @css), case: :lower),
-    js: @js && Base.encode16(:crypto.hash(:md5, @js), case: :lower)
+    js: @js && Base.encode16(:crypto.hash(:md5, @js), case: :lower),
+    logo: @logo && Base.encode16(:crypto.hash(:md5, @logo), case: :lower)
   }
 
   @doc """
-  Returns the current asset path segment for `asset` (`:css` or `:js`),
-  e.g. `"css-3f9c2a..."`. Used by `SquatchMail.Web.Layouts.root/1` to build
-  the `<link>`/`<script>` src.
+  Returns the current asset path segment for `asset` (`:css`, `:js`, or
+  `:logo`), e.g. `"css-3f9c2a..."`. Used by `SquatchMail.Web.Layouts` to
+  build the `<link>`/`<script>`/`<img>` src.
 
   Raises if the asset hasn't been built yet — run `mix assets.build`.
   """
-  @spec asset_path(:css | :js) :: String.t()
+  @spec asset_path(:css | :js | :logo) :: String.t()
   def asset_path(:css), do: "css-#{@hashes.css || missing!(:css)}"
   def asset_path(:js), do: "js-#{@hashes.js || missing!(:js)}"
+  def asset_path(:logo), do: "logo-#{@hashes.logo || missing!(:logo)}"
 
   @impl Plug
-  def init(action) when action in [:css, :js], do: action
+  def init(action) when action in [:css, :js, :logo], do: action
 
   @impl Plug
   def call(conn, :css), do: serve(conn, @css || missing!(:css), "text/css")
   def call(conn, :js), do: serve(conn, @js || missing!(:js), "text/javascript")
+  def call(conn, :logo), do: serve(conn, @logo || missing!(:logo), "image/png")
 
   defp serve(conn, contents, content_type) do
     conn
@@ -93,17 +107,23 @@ defmodule SquatchMail.Web.AssetController do
     |> halt()
   end
 
-  @spec missing!(:css | :js) :: no_return()
+  @spec missing!(:css | :js | :logo) :: no_return()
   defp missing!(asset) do
-    filename = "squatch_mail.#{asset}"
+    filename =
+      case asset do
+        :logo -> "squatch_mail_logo.png"
+        other -> "squatch_mail.#{other}"
+      end
 
     raise """
-    SquatchMail's #{filename} has not been built.
+    SquatchMail's #{filename} is missing from priv/static.
 
-    priv/static/#{filename} is missing. If you're developing SquatchMail \
-    itself, run:
+    If you're developing SquatchMail itself, run:
 
         mix assets.build
+
+    (The logo PNG is a committed file, not a build artifact — if it's the \
+    one missing, restore it from version control.)
 
     If you're a host application depending on SquatchMail as a hex package, \
     this file should have shipped with the package — please open an issue, \

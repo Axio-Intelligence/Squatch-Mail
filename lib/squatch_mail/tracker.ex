@@ -527,6 +527,103 @@ defmodule SquatchMail.Tracker do
     end)
   end
 
+  @doc """
+  Returns bounce reason details per email, for a list of email ids, in a
+  single query.
+
+  For each id, the *latest* `"bounce"` event's SES payload is summarized as
+  `%{bounce_type: _, bounce_subtype: _, diagnostic: _}` (any of which may be
+  `nil` — legacy payloads and manual status changes don't always carry them).
+  `:diagnostic` is the `diagnosticCode` of the bounced recipient matching the
+  event's own recipient, falling back to the first bounced recipient. Ids
+  with no bounce event are absent from the result map.
+
+  Used by the dashboard's Bounces page for its Reason column, the same way
+  `engagement_counts/1` backs the Trail Log's engagement column.
+  """
+  @spec bounce_details([integer()]) :: %{
+          integer() => %{
+            bounce_type: String.t() | nil,
+            bounce_subtype: String.t() | nil,
+            diagnostic: String.t() | nil
+          }
+        }
+  def bounce_details([]), do: %{}
+
+  def bounce_details(email_ids) when is_list(email_ids) do
+    email_ids
+    |> latest_events_by_email("bounce")
+    |> Map.new(fn event ->
+      bounce = payload_section(event, "bounce")
+
+      {event.email_id,
+       %{
+         bounce_type: bounce["bounceType"],
+         bounce_subtype: bounce["bounceSubType"],
+         diagnostic: bounce_diagnostic(bounce, event.recipient)
+       }}
+    end)
+  end
+
+  @doc """
+  Returns complaint details per email, for a list of email ids, in a single
+  query.
+
+  For each id, the *latest* `"complaint"` event's SES payload is summarized
+  as `%{feedback_type: _}` — the ISP's `complaintFeedbackType` (e.g.
+  `"abuse"`), which SES only includes when the reporting ISP provides it, so
+  it is often `nil`. Ids with no complaint event are absent from the result
+  map.
+
+  Used by the dashboard's Complaints page for its Feedback column.
+  """
+  @spec complaint_details([integer()]) :: %{integer() => %{feedback_type: String.t() | nil}}
+  def complaint_details([]), do: %{}
+
+  def complaint_details(email_ids) when is_list(email_ids) do
+    email_ids
+    |> latest_events_by_email("complaint")
+    |> Map.new(fn event ->
+      complaint = payload_section(event, "complaint")
+      {event.email_id, %{feedback_type: complaint["complaintFeedbackType"]}}
+    end)
+  end
+
+  # One row per email id: its most recent event of `event_type` (Postgres
+  # DISTINCT ON — the leftmost order_by expression must match the distinct
+  # expression).
+  defp latest_events_by_email(email_ids, event_type) do
+    query =
+      from ev in EmailEvent,
+        where: ev.email_id in ^email_ids and ev.event_type == ^event_type,
+        distinct: ev.email_id,
+        order_by: [asc: ev.email_id, desc: ev.occurred_at, desc: ev.id]
+
+    repo().all(query)
+  end
+
+  defp payload_section(%EmailEvent{payload: payload}, key) when is_map(payload) do
+    case Map.get(payload, key) do
+      section when is_map(section) -> section
+      _ -> %{}
+    end
+  end
+
+  defp payload_section(_event, _key), do: %{}
+
+  defp bounce_diagnostic(bounce, recipient) do
+    recipients =
+      case Map.get(bounce, "bouncedRecipients") do
+        list when is_list(list) -> Enum.filter(list, &is_map/1)
+        _ -> []
+      end
+
+    matched =
+      Enum.find(recipients, &(&1["emailAddress"] == recipient)) || List.first(recipients) || %{}
+
+    matched["diagnosticCode"]
+  end
+
   ## ---------------------------------------------------------------------------
   ## Stats
   ## ---------------------------------------------------------------------------

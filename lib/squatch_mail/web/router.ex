@@ -12,12 +12,14 @@ defmodule SquatchMail.Web.Router do
         end
       end
 
-  This expands to a `Phoenix.LiveView.Router.live_session/3` wrapping four
-  routes — Trail Log (`/`, the live activity feed), the Sighting inspector
-  (`/sightings/:public_id`), the Do-Not-Disturb registry (`/suppressions`),
-  and Base Camp (`/base-camp`) — plus a `GET .../activity/export.csv` CSV
-  download (same auth as the dashboard), a `GET .../assets/*` route pair for
-  the dashboard's self-contained CSS/JS (never auth-gated), and a
+  This expands to a `Phoenix.LiveView.Router.live_session/3` wrapping seven
+  routes — Trail Log (`/`, the live activity feed), the Sightings archive
+  (`/sightings`), the Sighting inspector (`/sightings/:public_id`), Bounces
+  (`/bounces`), Complaints (`/complaints`), the Do-Not-Disturb registry
+  (`/suppressions`), and Base Camp (`/base-camp`) — plus a
+  `GET .../activity/export.csv` CSV
+  download (same auth as the dashboard), `GET .../assets/*` routes for
+  the dashboard's self-contained CSS/JS and logo (never auth-gated), and a
   `POST .../webhooks/sns/:token` route that forwards to
   `SquatchMail.Web.WebhookController` (authenticated by its token, not the
   dashboard's auth layers).
@@ -190,6 +192,8 @@ defmodule SquatchMail.Web.Router do
 
         get "/assets/js-:md5", SquatchMail.Web.AssetController, :js, as: :squatch_mail_asset
 
+        get "/assets/logo-:md5", SquatchMail.Web.AssetController, :logo, as: :squatch_mail_asset
+
         # The SNS webhook is a machine-to-machine API route authenticated by
         # its per-source `:token` segment, not a browser session — it must
         # skip CSRF protection (there is no session/cookie to protect) and
@@ -209,7 +213,15 @@ defmodule SquatchMail.Web.Router do
 
         live_session session_name, session_opts do
           live "/", SquatchMail.Web.Live.TrailLog, :index, as: session_name
+
+          # The Sightings/Bounces/Complaints archive pages are the same
+          # LiveView as the Trail Log with a per-`live_action` page config —
+          # see `SquatchMail.Web.Live.TrailLog`'s moduledoc.
+          live "/sightings", SquatchMail.Web.Live.TrailLog, :sightings, as: session_name
           live "/sightings/:public_id", SquatchMail.Web.Live.Sighting, :show, as: session_name
+          live "/bounces", SquatchMail.Web.Live.TrailLog, :bounces, as: session_name
+          live "/complaints", SquatchMail.Web.Live.TrailLog, :complaints, as: session_name
+
           live "/suppressions", SquatchMail.Web.Live.Suppressions, :index, as: session_name
           live "/base-camp", SquatchMail.Web.Live.BaseCamp, :index, as: session_name
         end

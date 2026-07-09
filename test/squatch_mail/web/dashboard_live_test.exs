@@ -18,7 +18,10 @@ defmodule SquatchMail.Web.DashboardLiveTest do
   test "sidebar nav renders all six sections with the current page marked active", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/squatch")
 
-    assert html =~ "SQUATCHMAIL"
+    # The wordmark is split so "MAIL" carries the chartreuse accent, matching
+    # the landing page's logo lockup.
+    assert html =~ ~s(SQUATCH<span class="sq-sidebar__wordmark-accent">MAIL</span>)
+    assert html =~ "sq-sidebar__logo-img"
     assert html =~ "Trail Log"
     assert html =~ "Sightings"
     assert html =~ "Bounces"
