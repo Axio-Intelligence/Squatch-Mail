@@ -245,7 +245,7 @@ defmodule SquatchMail.SES do
         :ok
 
       {:error, {:unexpected_response, resp}} = error ->
-        if already_exists?(resp) do
+        if already_exists?(resp) or config_set_already_exists_message?(resp) do
           :ok
         else
           wrap(error, "create configuration set #{inspect(config_set)}")
@@ -255,6 +255,27 @@ defmodule SquatchMail.SES do
         wrap(other, "create configuration set #{inspect(config_set)}")
     end
   end
+
+  # SESv2's "configuration set already exists" conflict is an outlier: it comes
+  # back as HTTP 400 with body `{"message":"Configuration set <name> already
+  # exists."}` and — depending on region/endpoint — neither a `__type` body
+  # field nor a recognizable `x-amzn-errortype` header, so structured
+  # `already_exists?/1` detection can miss it (it would fall through to the
+  # `status == 409` branch, and SES returned 400). This narrow message check is
+  # the backstop, scoped to *only* this idempotent create call.
+  #
+  # It fires only when there is NO structured error code at all
+  # (`aws_error_code/1` is nil) — so a 400 that *does* carry a code the message
+  # merely happens to echo (e.g. a `ValidationException` whose text says "…
+  # already exists in another account…") is still handled by that code, not
+  # this text match. This is what keeps the free-text match the
+  # `aws_error_code/1` comment warns against from leaking into real errors.
+  defp config_set_already_exists_message?(%{status_code: 400, body: body} = resp)
+       when is_binary(body) do
+    is_nil(aws_error_code(resp)) and String.match?(body, ~r/already exists/i)
+  end
+
+  defp config_set_already_exists_message?(_), do: false
 
   # Reuses source.sns_topic_arn when the topic still exists; otherwise creates a
   # new topic. CreateTopic is itself idempotent by name in SNS, so a name-based
@@ -831,19 +852,18 @@ defmodule SquatchMail.SES do
   @not_found_codes ~w(NotFoundException NotFound ResourceNotFoundException)
 
   # Structured detection of idempotent "already exists" / "not found" error
-  # responses. Parses the AWS error CODE out of the response body — SESv2
-  # returns JSON with a `__type` field (e.g. `"AlreadyExistsException"`); SNS
-  # and other query-protocol services return XML with a `<Code>` element
-  # (e.g. `"NotFound"`). When no code can be parsed at all (an unrecognized or
-  # truncated body), falls back to HTTP status-code semantics: 409 Conflict
-  # implies "already exists", 404 Not Found implies "not found". This replaces
-  # free-text substring search over the response body, which was liable to
-  # false-match human-readable prose in `message`/`Message` fields that merely
-  # *mentions* the words "not found" or "already exists" without actually being
-  # that error (e.g. a validation error whose message happens to say "the
-  # specified role was not found").
-  defp already_exists?(%{status_code: status, body: body}) do
-    case aws_error_code(body) do
+  # responses. Parses the AWS error CODE out of the response — from the
+  # `x-amzn-errortype` header first, then the body (SESv2 JSON `__type`, SNS/
+  # query-protocol XML `<Code>`). When no code can be parsed at all (an
+  # unrecognized or truncated response), falls back to HTTP status-code
+  # semantics: 409 Conflict implies "already exists", 404 Not Found implies
+  # "not found". This replaces free-text substring search over the response
+  # body, which was liable to false-match human-readable prose in
+  # `message`/`Message` fields that merely *mentions* the words "not found" or
+  # "already exists" without actually being that error (e.g. a validation error
+  # whose message happens to say "the specified role was not found").
+  defp already_exists?(%{status_code: status} = resp) do
+    case aws_error_code(resp) do
       nil -> status == 409
       code -> code in @already_exists_codes
     end
@@ -851,8 +871,8 @@ defmodule SquatchMail.SES do
 
   defp already_exists?(_), do: false
 
-  defp not_found?(%{status_code: status, body: body}) do
-    case aws_error_code(body) do
+  defp not_found?(%{status_code: status} = resp) do
+    case aws_error_code(resp) do
       nil -> status == 404
       code -> code in @not_found_codes
     end
@@ -860,17 +880,45 @@ defmodule SquatchMail.SES do
 
   defp not_found?(_), do: false
 
-  # Extracts the AWS error code from a response body, trying SESv2's JSON
-  # shape first (`{"__type": "...", "message": "..."}`, where `__type` may
-  # carry a `com.amazonaws.xxx#` namespace prefix that we strip) and falling
-  # back to the XML query-protocol shape SNS uses
-  # (`<ErrorResponse><Error><Code>...</Code>...`). Returns `nil` when the body
-  # doesn't parse as either (callers fall back to status-code semantics).
-  defp aws_error_code(body) when is_binary(body) do
-    json_error_code(body) || xml_error_code(body)
+  # Extracts the AWS error code from a response, preferring the
+  # `x-amzn-errortype` response header — the `aws` client surfaces the error
+  # type there even when SESv2 omits `__type` from the JSON body (exactly the
+  # HTTP-400 "already exists" case that structured body parsing misses) —
+  # then falling back to the body: SESv2's JSON `__type` (which may carry a
+  # `com.amazonaws.xxx#` namespace prefix we strip), then the XML
+  # query-protocol `<Code>` element SNS uses. Returns `nil` when none is
+  # present (callers fall back to status-code semantics).
+  defp aws_error_code(resp) when is_map(resp) do
+    header_error_type(resp) || body_error_code(Map.get(resp, :body))
   end
 
   defp aws_error_code(_), do: nil
+
+  # The `x-amzn-errortype` value looks like `"AlreadyExistsException"` and may
+  # carry a `:<url-or-detail>` suffix, which we strip to the bare type name.
+  # Finch (the HTTP client SquatchMail uses) lowercases response header names.
+  defp header_error_type(%{headers: headers}) when is_list(headers) do
+    Enum.find_value(headers, fn
+      {name, value} when is_binary(name) and is_binary(value) ->
+        if String.downcase(name) == "x-amzn-errortype" do
+          case value |> String.split(":", parts: 2) |> hd() |> String.trim() do
+            "" -> nil
+            type -> type
+          end
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp header_error_type(_), do: nil
+
+  defp body_error_code(body) when is_binary(body) do
+    json_error_code(body) || xml_error_code(body)
+  end
+
+  defp body_error_code(_), do: nil
 
   defp json_error_code(body) do
     with {:ok, %{"__type" => type}} <- Jason.decode(body) do

@@ -9,26 +9,35 @@ defmodule SquatchMail.SNS.RawBodyReader do
   `Plug.Parsers` hands a controller a parsed `conn.params`, the original body
   is gone unless something captured it first.
 
-  ## Wiring this in
+  ## Do you need this?
+
+  Usually **no**. `squatch_mail_dashboard` pipes the webhook route through
+  `SquatchMail.SNS.RawBodyPlug`, which captures the raw body automatically —
+  hosts don't have to wire anything. This module remains as an *optional*
+  `Plug.Parsers` `:body_reader` for hosts that prefer to capture the raw body
+  at the endpoint themselves; `RawBodyPlug` detects an already-set
+  `conn.assigns[:raw_body]` and stands down, so the two never fight.
+
+  Note that a `:body_reader` alone is **not** sufficient for SNS: SNS sends
+  `Content-Type: text/plain; charset=UTF-8`, which `Plug.Parsers` matches no
+  parser for, so it never invokes the `:body_reader` for a real SNS request.
+  That is exactly why `RawBodyPlug` (which reads unconditionally, after the
+  parsers pass the body through unread) is the reliable default.
+
+  ## Wiring this in (optional)
 
   `Plug.Parsers` accepts a `:body_reader` option that must be a `{module,
   function, args}` tuple implementing the same contract as
   `Plug.Conn.read_body/2` (`{:ok, body, conn} | {:more, partial, conn} |
   {:error, term}`), invoked once per chunk. Point it at this module wherever
-  the webhook route's pipeline configures `Plug.Parsers`, scoped to just the
-  `/webhooks/sns/:token` path (raw-body caching in `conn.assigns` is a small,
-  bounded cost - fine to scope broadly too, but the SNS route is the only one
-  that needs it):
+  the host endpoint configures `Plug.Parsers`:
 
       plug Plug.Parsers,
         parsers: [:json],
         json_decoder: Jason,
         body_reader: {SquatchMail.SNS.RawBodyReader, :read_body, []}
 
-  This must run *before* `:json` parsing consumes the body. The router or
-  endpoint that mounts `SquatchMail.Web.WebhookController` needs a pipeline
-  built this way for the webhook path (the dashboard's browser
-  pipeline/live_session for the rest of the routes does not need this).
+  This must run *before* `:json` parsing consumes the body.
   """
 
   @doc """

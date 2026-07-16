@@ -22,10 +22,12 @@ defmodule SquatchMail.Test.AWSStub do
     * `url_matcher` is a `Regex`, a substring `String`, or `:any`.
     * `responder` is a 1-arity fun receiving a request map
       `%{method:, url:, body:, headers:, options:}` and returning either
-      `{:ok, status, body}` (an iodata/binary body), `{:error, reason}`, or
-      `:pass` to decline and let the next registered matcher try (useful when
-      several matchers share a URL — e.g. every SNS action hits the same host —
-      and each responder dispatches on the request body's `Action`).
+      `{:ok, status, body}` (an iodata/binary body), `{:ok, status, body,
+      resp_headers}` (to canned response headers such as `x-amzn-errortype`),
+      `{:error, reason}`, or `:pass` to decline and let the next registered
+      matcher try (useful when several matchers share a URL — e.g. every SNS
+      action hits the same host — and each responder dispatches on the request
+      body's `Action`).
 
   Matchers are tried in registration order; the first that both matches the
   method/URL and does not return `:pass` wins. An otherwise-unmatched request
@@ -95,6 +97,14 @@ defmodule SquatchMail.Test.AWSStub do
 
       {:ok, status, resp_body} ->
         {:ok, %{status_code: status, headers: [], body: IO.iodata_to_binary(resp_body || "")}}
+
+      {:ok, status, resp_body, resp_headers} ->
+        {:ok,
+         %{
+           status_code: status,
+           headers: resp_headers,
+           body: IO.iodata_to_binary(resp_body || "")
+         }}
 
       {:error, _reason} = error ->
         error

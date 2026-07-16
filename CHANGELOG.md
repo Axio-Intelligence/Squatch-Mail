@@ -8,6 +8,40 @@ follows [Semantic Versioning](https://semver.org/) once it reaches 1.0.
 
 Nothing yet.
 
+## [0.1.1] — 2026-07-15
+
+### Fixed
+
+- **SNS webhooks no longer 500 on every delivery.** SNS posts to HTTP/S
+  endpoints with `Content-Type: text/plain`, which a host's `Plug.Parsers`
+  matches no parser for and passes through with the body unread — so the
+  documented endpoint `:body_reader` never fired, `conn.assigns[:raw_body]`
+  was never set, and every `SubscriptionConfirmation`/`Notification` fell
+  through to `{:unsupported_message_type, nil}` and a 500. The webhook route
+  now captures its own raw body via the new `SquatchMail.SNS.RawBodyPlug`
+  (mounted by `squatch_mail_dashboard`), independent of the host's
+  `Plug.Parsers`. **Hosts no longer need to wire up a `:body_reader` at all**;
+  an already-captured `conn.assigns[:raw_body]` is still honored. The
+  controller now logs an actionable error instead of silently fabricating a
+  body when the raw bytes are missing.
+- **Idempotent SES provisioning recognizes SESv2's HTTP-400 "already exists"
+  conflict.** `create configuration set` returns the conflict as HTTP 400 with
+  a bare `{"message":"… already exists."}` body — no `__type`, so structured
+  detection missed it and re-provisioning aborted. Error-code detection now
+  also reads the `x-amzn-errortype` response header, plus a narrowly-scoped
+  400-with-"already exists"-message backstop on the create call only (fires
+  only when no structured error code is present, so it can't false-match
+  unrelated validation errors). The header fix mirrors to the "not found"
+  topic-lookup path too.
+
+### Changed
+
+- `mix squatch_mail.install` no longer patches the host endpoint's
+  `Plug.Parsers` (the raw-body capture is now handled by the router), removing
+  a fragile AST-surgery step and its "signature verification will fail until
+  you wire this by hand" notices. `SquatchMail.SNS.RawBodyReader` remains as an
+  optional endpoint-side `:body_reader`.
+
 ## [0.1.0] — 2026-07-09
 
 First release published to Hex. See `FEATURES.md` for the full parity

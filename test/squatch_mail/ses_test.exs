@@ -417,6 +417,86 @@ defmodule SquatchMail.SESTest do
 
       assert updated.sns_topic_arn == new_arn
     end
+
+    test "treats an HTTP-400 message-only 'already exists' configuration set as success (SESv2)",
+         %{stub: stub, client: client} do
+      # The exact production shape that broke re-provision: SESv2 returns HTTP
+      # 400 with a bare `{"message": "... already exists."}` body — no
+      # `__type`, no `x-amzn-errortype` header — so structured detection finds
+      # no code and the status is 400 (not 409). The scoped message backstop in
+      # `ensure_configuration_set` must still treat this idempotent create as
+      # success.
+      source = Tracker.get_or_create_source()
+      topic_arn = "arn:aws:sns:us-east-1:123456789012:squatch_mail-events"
+
+      AWSStub.stub(stub, :post, @config_sets_path, fn req ->
+        if req.url =~ "event-destinations" do
+          {:ok, 200, ""}
+        else
+          {:ok, 400, ~s({"message":"Configuration set squatch_mail-events already exists."})}
+        end
+      end)
+
+      stub_create_topic(stub, topic_arn)
+      stub_subscribe(stub, "#{topic_arn}:sub-1")
+
+      assert {:ok, _updated} =
+               SES.provision(source, "https://mail.example.com/webhooks/ses/t", client)
+    end
+
+    test "recognizes an 'already exists' conflict from the x-amzn-errortype header",
+         %{stub: stub, client: client} do
+      # Even when SESv2 omits `__type` from the body, the `aws` client surfaces
+      # the error type in the `x-amzn-errortype` response header (here with the
+      # `:`-delimited suffix AWS sometimes appends, which we strip). The body
+      # here says nothing about "already exists" — only the header does — so
+      # this isolates the header path from the message backstop.
+      source = Tracker.get_or_create_source()
+      topic_arn = "arn:aws:sns:us-east-1:123456789012:squatch_mail-events"
+
+      AWSStub.stub(stub, :post, @config_sets_path, fn req ->
+        if req.url =~ "event-destinations" do
+          {:ok, 200, ""}
+        else
+          {:ok, 400, ~s({"message":"bad request"}),
+           [{"x-amzn-errortype", "AlreadyExistsException:http://internal.amazon.com/coral/"}]}
+        end
+      end)
+
+      stub_create_topic(stub, topic_arn)
+      stub_subscribe(stub, "#{topic_arn}:sub-1")
+
+      assert {:ok, _updated} =
+               SES.provision(source, "https://mail.example.com/webhooks/ses/t", client)
+    end
+
+    test "the shared x-amzn-errortype extraction also powers not_found? (recreates the topic)",
+         %{stub: stub, client: client} do
+      # Mirror of the already-exists header case: a topic lookup whose error
+      # type arrives only in the `x-amzn-errortype` header is still recognized
+      # as "not found", so provision recreates the topic rather than aborting.
+      stale_arn = "arn:aws:sns:us-east-1:123456789012:gone"
+      new_arn = "arn:aws:sns:us-east-1:123456789012:squatch_mail-events"
+      {:ok, source} = Tracker.update_source(%{sns_topic_arn: stale_arn})
+
+      stub_create_configuration_set(stub)
+
+      AWSStub.stub(stub, :post, @sns_path, fn req ->
+        if req.body =~ "Action=GetTopicAttributes" do
+          {:ok, 400, ~s({"message":"whatever"}), [{"x-amzn-errortype", "NotFoundException"}]}
+        else
+          :pass
+        end
+      end)
+
+      stub_create_topic(stub, new_arn)
+      stub_subscribe(stub, "#{new_arn}:sub-1")
+
+      assert {:ok, updated} =
+               SES.provision(source, "https://mail.example.com/webhooks/ses/tok", client)
+
+      assert updated.sns_topic_arn == new_arn
+    end
   end
 
   ## ---- sync_quota / ensure_quota_synced -------------------------------------

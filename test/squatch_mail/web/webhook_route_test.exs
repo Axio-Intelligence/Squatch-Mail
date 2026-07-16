@@ -54,15 +54,66 @@ defmodule SquatchMail.Web.WebhookRouteTest do
     end
   end
 
-  describe "raw body preservation (the documented host-endpoint wiring)" do
-    test "the exact request bytes reach conn.assigns[:raw_body] before the controller runs", %{
-      conn: conn
-    } do
-      # Whitespace here is deliberate: if anything re-encoded this (e.g. the
-      # controller's own `Jason.encode!(conn.params)` fallback documented in
-      # WebhookController), the byte-for-byte whitespace would be lost —
-      # proving this exact binary survived proves the real raw bytes were
-      # used, not a round-tripped re-encoding.
+  describe "raw body capture via SquatchMail.SNS.RawBodyPlug" do
+    setup do
+      # SNS delivers with `Content-Type: text/plain; charset=UTF-8`, which the
+      # host endpoint's Plug.Parsers matches no parser for and passes through
+      # unread — so `RawBodyPlug` (in SquatchMail's own router pipeline) is
+      # what captures the body for these tests, not the endpoint body_reader.
+      Application.put_env(:squatch_mail, :verify_sns_signatures, false)
+      on_exit(fn -> Application.delete_env(:squatch_mail, :verify_sns_signatures) end)
+      :ok
+    end
+
+    test "captures the exact text/plain bytes SNS sends, so the Type is recognized", %{conn: conn} do
+      # Whitespace is deliberate: if anything re-encoded this (e.g. the
+      # controller's `Jason.encode!(conn.params)` fallback), the byte-for-byte
+      # whitespace would be lost. Proving this exact binary survives proves the
+      # real raw bytes were used — the bug was that for text/plain the body was
+      # never read at all, so `conn.params` held only the path params.
+      raw_payload = ~s({  "Type" : "UnsubscribeConfirmation" ,"TopicArn":"arn:x"  })
+
+      conn =
+        conn
+        |> Plug.Conn.put_req_header("content-type", "text/plain; charset=UTF-8")
+        |> post("/squatch/webhooks/sns/abc123", raw_payload)
+
+      assert conn.assigns[:raw_body] == raw_payload
+    end
+
+    test "a text/plain Notification is ingested end-to-end (200), not treated as an unknown type",
+         %{conn: conn} do
+      source = SquatchMail.Tracker.get_or_create_source()
+
+      # A real SNS Notification envelope, delivered as text/plain — the exact
+      # shape that used to fall through to `{:unsupported_message_type, nil}`
+      # and 500 because the body was never read.
+      payload =
+        Jason.encode!(%{
+          "Type" => "Notification",
+          "MessageId" => Ecto.UUID.generate(),
+          "TopicArn" => "arn:aws:sns:us-east-1:123456789012:squatch-mail-events",
+          "Message" =>
+            Jason.encode!(%{"eventType" => "Send", "mail" => %{"messageId" => "msg-abc"}}),
+          "Timestamp" => DateTime.utc_now() |> DateTime.to_iso8601(),
+          "SignatureVersion" => "1",
+          "Signature" => "unused",
+          "SigningCertURL" => "https://sns.us-east-1.amazonaws.com/cert.pem"
+        })
+
+      conn =
+        conn
+        |> Plug.Conn.put_req_header("content-type", "text/plain; charset=UTF-8")
+        |> post("/squatch/webhooks/sns/#{source.webhook_token}", payload)
+
+      assert conn.assigns[:raw_body] == payload
+      assert conn.status == 200
+    end
+
+    test "an already-captured raw body (host body_reader path) is left untouched", %{conn: conn} do
+      # application/json IS matched by Plug.Parsers, so the endpoint's
+      # CacheBodyReader captures the body; RawBodyPlug must then stand down and
+      # preserve those exact bytes rather than re-reading an emptied body.
       raw_payload = ~s({  "Type" : "Notification" ,"foo":"bar"  })
 
       conn =
@@ -73,15 +124,15 @@ defmodule SquatchMail.Web.WebhookRouteTest do
       assert conn.assigns[:raw_body] == raw_payload
     end
 
-    test "non-webhook routes are not affected by the path-conditional reader", %{conn: conn} do
+    test "non-webhook routes never run RawBodyPlug", %{conn: conn} do
       Application.put_env(:squatch_mail, :allow_unauthenticated, true)
       Application.delete_env(:squatch_mail, :basic_auth)
 
       conn = get(conn, "/squatch")
 
-      # The reader only caches for the webhook path; every other route
-      # (including the rest of the dashboard) should see no :raw_body assign
-      # at all, confirming the path check actually discriminates.
+      # RawBodyPlug is mounted only on the webhook route's pipeline; every
+      # other route (including the rest of the dashboard) should see no
+      # :raw_body assign at all.
       refute Map.has_key?(conn.assigns, :raw_body)
     end
   end

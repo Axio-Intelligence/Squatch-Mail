@@ -32,6 +32,8 @@ defmodule SquatchMail.Web.WebhookController do
 
   import Plug.Conn
 
+  require Logger
+
   alias SquatchMail.SNS.Processor
 
   @impl Plug
@@ -52,7 +54,7 @@ defmodule SquatchMail.Web.WebhookController do
   @impl Plug
   def call(conn, :create) do
     token = conn.path_params["token"]
-    raw_body = Map.get(conn.assigns, :raw_body) || Jason.encode!(conn.params)
+    raw_body = raw_body(conn)
 
     conn =
       case Processor.process(raw_body, token) do
@@ -70,5 +72,30 @@ defmodule SquatchMail.Web.WebhookController do
       end
 
     halt(conn)
+  end
+
+  # The raw body is normally captured by `SquatchMail.SNS.RawBodyPlug`, which
+  # the router pipes the webhook route through (see
+  # `SquatchMail.Web.Router`'s "Webhook raw body" moduledoc). A host that
+  # already captures it via a `Plug.Parsers` `:body_reader` is also honored.
+  # If neither ran, the raw bytes are gone: re-encoding `conn.params` is *not*
+  # byte-identical to what SNS sent, so signature verification will fail — we
+  # log loudly rather than let a wiring bug hide behind an inscrutable 500.
+  defp raw_body(conn) do
+    case Map.get(conn.assigns, :raw_body) do
+      body when is_binary(body) ->
+        body
+
+      _ ->
+        Logger.error(
+          "SquatchMail.Web.WebhookController: raw request body was not captured " <>
+            "(conn.assigns[:raw_body] is unset). SNS sends text/plain, which " <>
+            "Plug.Parsers passes through unread — check that the webhook route " <>
+            "pipes through SquatchMail.SNS.RawBodyPlug. Falling back to " <>
+            "re-encoding conn.params, which will fail SNS signature verification."
+        )
+
+        Jason.encode!(conn.params)
+    end
   end
 end

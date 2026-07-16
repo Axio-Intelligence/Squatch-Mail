@@ -61,11 +61,13 @@ defmodule SquatchMail.Test.WebEndpoint do
 
   plug Plug.Session, @session_options
 
-  # body_reader wired the same way hosts are documented to wire it in their
-  # own endpoint (see SquatchMail.Web.Router's "Webhook raw body" section):
-  # path-conditional, so only the SNS webhook route pays for raw-body
-  # caching. This lets webhook_route_test.exs prove the reference wiring
-  # actually preserves bytes end-to-end, not just that the route dispatches.
+  # A host-supplied `body_reader` — the *optional* endpoint-side capture path
+  # (see SquatchMail.Web.Router's "Webhook raw body" section). Wired here so
+  # webhook_route_test.exs can prove SquatchMail.SNS.RawBodyPlug stands down
+  # when a host already captured the raw body (application/json path). Note it
+  # is NOT invoked for SNS's real text/plain content-type — Plug.Parsers
+  # matches no parser for it — which is exactly why RawBodyPlug exists and why
+  # the text/plain tests exercise the plug, not this reader.
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
@@ -79,11 +81,13 @@ end
 
 defmodule SquatchMail.Test.CacheBodyReader do
   @moduledoc """
-  Test-support copy of the path-conditional `body_reader` documented on
-  `SquatchMail.Web.Router` ("Webhook raw body") as required host-endpoint
-  wiring — exercised here so `webhook_route_test.exs` can assert the
-  documented pattern actually preserves raw bytes to
-  `SquatchMail.SNS.RawBodyReader`, not just that routing works.
+  Test-support copy of the *optional* path-conditional `body_reader`
+  documented on `SquatchMail.Web.Router` ("Webhook raw body") — a host that
+  prefers to capture the raw body at the endpoint. Exercised here so
+  `webhook_route_test.exs` can assert this reader still preserves raw bytes
+  (and that `SquatchMail.SNS.RawBodyPlug` stands down when it does) for
+  content-types `Plug.Parsers` actually parses. It never fires for SNS's real
+  `text/plain` content-type — that is `RawBodyPlug`'s job.
   """
 
   def read_body(conn, opts) do

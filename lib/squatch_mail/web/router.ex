@@ -106,45 +106,32 @@ defmodule SquatchMail.Web.Router do
 
   SNS signature verification (`SquatchMail.SNS.MessageVerifier`, used by
   `SquatchMail.Web.WebhookController`) needs the exact bytes SNS sent, not a
-  round-tripped re-encoding of the parsed params. This is the one piece of
-  wiring `squatch_mail_dashboard` genuinely **cannot** set up for you: by the
-  time a router (this macro included) sees a request, the host application's
-  own endpoint has already run `Plug.Parsers` and discarded the raw body.
-  `Plug.Parsers`'s `:body_reader` option has no per-route scoping — it's
-  endpoint-wide — so there is no router-level fix.
+  round-tripped re-encoding of the parsed params. `squatch_mail_dashboard`
+  handles this for you: the webhook route pipes through
+  `SquatchMail.SNS.RawBodyPlug`, which reads the raw body into
+  `conn.assigns[:raw_body]` before the controller runs. **Hosts need to wire
+  up nothing** — not a `:body_reader`, not an endpoint change.
 
-  You must add a path-conditional `body_reader` to your own endpoint,
-  *before* the router plug, that delegates to
-  `SquatchMail.SNS.RawBodyReader` only for the webhook path and falls
-  through to the plain reader for everything else (including the rest of
-  the dashboard, which doesn't need this):
+  This works even though the host endpoint's `Plug.Parsers` runs first,
+  because SNS delivers with `Content-Type: text/plain; charset=UTF-8` and
+  `Plug.Parsers` (with the usual `[:urlencoded, :multipart, :json]` parsers
+  and `pass: ["*/*"]`) matches no parser for `text/plain` — so it passes the
+  request through with the body **still unread**, leaving those bytes for
+  `RawBodyPlug` to consume in SquatchMail's own pipeline. This is also why the
+  earlier "endpoint-wide `:body_reader`, no router-level fix" framing was
+  wrong for SNS: `Plug.Parsers` never invokes a `:body_reader` for
+  `text/plain` at all, so an endpoint reader would never have fired for a real
+  SNS request regardless.
 
-      # in your endpoint.ex
-      defmodule MyAppWeb.CacheBodyReader do
-        def read_body(conn, opts) do
-          if match?(["squatch", "webhooks", "sns", _token], conn.path_info) do
-            SquatchMail.SNS.RawBodyReader.read_body(conn, opts)
-          else
-            Plug.Conn.read_body(conn, opts)
-          end
-        end
-      end
-
-      plug Plug.Parsers,
-        parsers: [:urlencoded, :multipart, :json],
-        pass: ["*/*"],
-        json_decoder: Phoenix.json_library(),
-        body_reader: {MyAppWeb.CacheBodyReader, :read_body, []}
-
-  Adjust the path prefix if you mount the dashboard somewhere other than
-  `/squatch`. `dev.exs` and `test/support/web_endpoint.ex` in this repo carry
-  this exact pattern (`SquatchMailDev.CacheBodyReader` /
-  `SquatchMail.Test.CacheBodyReader`) as reference implementations, and
-  `test/squatch_mail/web/webhook_route_test.exs` asserts the wiring
-  preserves bytes exactly. If this step is skipped, `WebhookController`
-  falls back to re-encoding `conn.params` as JSON — not byte-identical to
-  what SNS sent — so signature verification will fail on every request; see
-  `SquatchMail.SNS.RawBodyReader`'s own moduledoc for the underlying detail.
+  Hosts that already capture the raw body themselves still work: if
+  `conn.assigns[:raw_body]` is already set (e.g. via
+  `SquatchMail.SNS.RawBodyReader` wired into the endpoint's `Plug.Parsers`
+  `:body_reader`), `RawBodyPlug` leaves it untouched. That path is an optional
+  belt-and-suspenders, no longer a requirement. If, somehow, the raw body is
+  not captured at all, `WebhookController` logs an actionable error and falls
+  back to re-encoding `conn.params` — not byte-identical to what SNS sent, so
+  signature verification will fail; see `SquatchMail.SNS.RawBodyPlug`'s
+  moduledoc for the full detail.
 
   ## Options
 
@@ -171,8 +158,14 @@ defmodule SquatchMail.Web.Router do
     # `squatch_mail_dashboard` more than once in the same router (e.g. two
     # differently-authed mounts) doesn't collide.
     pipeline_name = :"squatch_mail_auth_#{:erlang.phash2(path)}"
+    webhook_pipeline_name = :"squatch_mail_webhook_#{:erlang.phash2(path)}"
 
-    quote bind_quoted: [path: path, opts: opts, pipeline_name: pipeline_name] do
+    quote bind_quoted: [
+            path: path,
+            opts: opts,
+            pipeline_name: pipeline_name,
+            webhook_pipeline_name: webhook_pipeline_name
+          ] do
       {session_name, session_opts, auth_plug_opts} =
         SquatchMail.Web.Router.__options__(__MODULE__, path, opts)
 
@@ -180,9 +173,35 @@ defmodule SquatchMail.Web.Router do
         plug SquatchMail.Web.Plugs.Auth, auth_plug_opts
       end
 
+      # Captures the exact raw request bytes into `conn.assigns[:raw_body]`
+      # for SNS signature verification — this is the piece the router *can*
+      # own (unlike `Plug.Parsers`'s endpoint-wide `:body_reader`), because it
+      # runs after the host endpoint's parsers have already passed SNS's
+      # `text/plain` body through unread. See the "Webhook raw body" moduledoc
+      # section and `SquatchMail.SNS.RawBodyPlug`.
+      pipeline webhook_pipeline_name do
+        plug SquatchMail.SNS.RawBodyPlug
+      end
+
+      # The SNS webhook lives in its own scope so it pipes through *only* the
+      # raw-body pipeline (never the dashboard auth pipeline, and no dashboard
+      # route pays for raw-body reading). It's a machine-to-machine API route
+      # authenticated by its per-source `:token` segment, not a browser
+      # session — it must skip CSRF protection (there is no session/cookie to
+      # protect) and must never be gated by the dashboard's own auth layers.
+      scope path, alias: false, as: false do
+        import Phoenix.Router, only: [post: 4, pipe_through: 1]
+
+        pipe_through webhook_pipeline_name
+
+        post "/webhooks/sns/:token", SquatchMail.Web.WebhookController, :create,
+          as: :squatch_mail_webhook,
+          private: %{plug_skip_csrf_protection: true}
+      end
+
       scope path, alias: false, as: false do
         import Phoenix.LiveView.Router, only: [live: 4, live_session: 3]
-        import Phoenix.Router, only: [get: 4, post: 4, pipe_through: 1]
+        import Phoenix.Router, only: [get: 4, pipe_through: 1]
 
         # Asset routes sit outside the auth pipeline and the live_session on
         # purpose: the dashboard's CSS/JS (including the refusal page's own
@@ -193,14 +212,6 @@ defmodule SquatchMail.Web.Router do
         get "/assets/js-:md5", SquatchMail.Web.AssetController, :js, as: :squatch_mail_asset
 
         get "/assets/logo-:md5", SquatchMail.Web.AssetController, :logo, as: :squatch_mail_asset
-
-        # The SNS webhook is a machine-to-machine API route authenticated by
-        # its per-source `:token` segment, not a browser session — it must
-        # skip CSRF protection (there is no session/cookie to protect) and
-        # must never be gated by the dashboard's own auth layers.
-        post "/webhooks/sns/:token", SquatchMail.Web.WebhookController, :create,
-          as: :squatch_mail_webhook,
-          private: %{plug_skip_csrf_protection: true}
 
         pipe_through pipeline_name
 

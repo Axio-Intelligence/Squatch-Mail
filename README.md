@@ -251,57 +251,24 @@ If you'd rather not use igniter, or want full control over each step:
    required — SquatchMail observes mail sent through Swoosh automatically
    via telemetry.
 
-5. **Teach your endpoint to preserve the evidence.** SquatchMail's SNS
+5. **The SNS webhook's raw body — nothing to wire up.** SquatchMail's SNS
    webhook needs the *exact bytes* SNS sent to verify the request's
-   signature — but by the time a router (including `squatch_mail_dashboard`'s
-   own macro) sees a request, your endpoint's `Plug.Parsers` has already read
-   and discarded the raw body. `Plug.Parsers`'s `:body_reader` option is
-   endpoint-wide, not per-route, so this is the one piece of wiring the
-   installer/router genuinely cannot do for you — it has to happen in your
-   own `endpoint.ex`, *before* the router plug:
+   signature. `squatch_mail_dashboard` handles this for you: the webhook
+   route pipes through `SquatchMail.SNS.RawBodyPlug`, which captures the raw
+   body in SquatchMail's own pipeline — no endpoint changes, no `:body_reader`
+   to configure.
 
-   ```elixir
-   # in your endpoint.ex
-   defmodule MyAppWeb.SquatchMailBodyReader do
-     @path_segments ["squatch"]
+   This works even though your endpoint's `Plug.Parsers` runs first: SNS
+   delivers with `Content-Type: text/plain; charset=UTF-8`, which
+   `Plug.Parsers` matches no parser for and (with `pass: ["*/*"]`) passes
+   through with the body still unread — so those bytes are still there for
+   `RawBodyPlug` to read. (An endpoint `:body_reader`, the old recommendation,
+   never even fires for `text/plain`, which is why it wasn't enough.)
 
-     def read_body(conn, opts) do
-       if webhook_path?(conn.path_info) do
-         SquatchMail.SNS.RawBodyReader.read_body(conn, opts)
-       else
-         Plug.Conn.read_body(conn, opts)
-       end
-     end
-
-     defp webhook_path?(path_info) do
-       prefix = @path_segments
-
-       case Enum.split(path_info, length(prefix)) do
-         {^prefix, ["webhooks", "sns", _token]} -> true
-         _ -> false
-       end
-     end
-   end
-
-   plug Plug.Parsers,
-     parsers: [:urlencoded, :multipart, :json],
-     pass: ["*/*"],
-     json_decoder: Phoenix.json_library(),
-     body_reader: {MyAppWeb.SquatchMailBodyReader, :read_body, []}
-   ```
-
-   Adjust `@path_segments` if you mounted the dashboard somewhere other than
-   `/squatch`. Skip this step and every real SNS notification will fail
-   signature verification — the webhook falls back to re-encoding the parsed
-   params as JSON, which isn't byte-identical to what SNS sent.
-
-   `mix igniter.install squatch_mail` does this step for you automatically
-   (it generates the reader module and patches your endpoint's
-   `Plug.Parsers` call) when your endpoint looks like a standard `mix
-   phx.new` endpoint. If your `Plug.Parsers` options aren't a plain literal
-   keyword list, or you already have a different `:body_reader` configured,
-   the installer won't guess — it leaves your endpoint untouched and prints
-   this exact snippet as a notice instead.
+   If you already capture the raw body yourself (e.g. a `Plug.Parsers`
+   `:body_reader` delegating to `SquatchMail.SNS.RawBodyReader`), that still
+   works — `RawBodyPlug` detects an already-set `conn.assigns[:raw_body]` and
+   stands down. It's optional now, not required.
 
    **Read the "Keeping the Forest Safe" section below before you deploy
    this anywhere but your own laptop.**
