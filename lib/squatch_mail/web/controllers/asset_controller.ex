@@ -31,7 +31,7 @@ defmodule SquatchMail.Web.AssetController do
   directly in module attributes would mean a missing build breaks
   `mix compile` for the *entire* dependent application, not just the
   dashboard — an unacceptable failure mode for a library. Instead, this
-  module reads with `File.read/2` at compile time and tolerates a `nil`
+  module reads with `File.read/1` at compile time and tolerates a `nil`
   result; `asset_path/1` and `call/2` both raise a descriptive
   `RuntimeError` only when the missing asset is actually requested, pointing
   at `mix assets.build` as the fix.

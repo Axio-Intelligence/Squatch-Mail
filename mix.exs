@@ -81,7 +81,7 @@ defmodule SquatchMail.MixProject do
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
       files:
-        ~w(lib priv/repo/migrations priv/static .formatter.exs mix.exs README.md CHANGELOG.md SECURITY.md CLAUDE.md)
+        ~w(lib priv/repo/migrations priv/static .formatter.exs mix.exs README.md CHANGELOG.md SECURITY.md CLAUDE.md LICENSE)
     ]
   end
 
@@ -96,7 +96,8 @@ defmodule SquatchMail.MixProject do
         "SECURITY.md",
         "RESEARCH.md",
         "FEATURES.md",
-        "DESIGN.md"
+        "DESIGN.md",
+        "LICENSE"
       ]
     ]
   end
